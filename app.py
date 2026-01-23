@@ -151,6 +151,8 @@ def download_file():
 
 # === ЗАПУСК ===
 if __name__ == '__main__':
-    # print("✅ Server starting on http://127.0.0.1:5000")
-    print("📄 Swagger UI: http://127.0.0.1:5000/docs/")
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    # print(f"✅ Server starting on http://0.0.0.0:{port}")
+    print(f"📄 Swagger UI: http://0.0.0.0:{port}/docs/")
+    app.run(host='0.0.0.0', port=port, debug=False)
