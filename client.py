@@ -441,16 +441,16 @@ if __name__ == "__main__":
     # set_server_url("https://new-server.example.com")
 
     # Send a request from Android client (text only)
-    # send_request(text="Hello from Android client!")
+    send_request(text="Hello from Android client!")
 
     # Send a request from Android client (text and image)
-    # send_request(text="Request with image", image_path="виноградик.png")
+    send_request(text="Request with image", image_path="виноградик.png")
 
     # Get request status
-    # get_request_status()
+    get_request_status()
 
     # Get last request (this will mark it as read)
-    # get_last_request()
+    get_last_request()
 
     # Upload the specific file
     # upload_file("виноградик.png")
