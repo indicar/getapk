@@ -328,9 +328,9 @@ def get_last_request():
             text:
               type: string
               description: Request text
-            image_path:
+            image_base64:
               type: string
-              description: Path to the image file
+              description: Base64-encoded image data
       404:
         description: No unread request available
     """
@@ -343,8 +343,18 @@ def get_last_request():
     # Prepare response
     response_data = {
         "text": last_request['text'],
-        "image_path": last_request['image_path']
+        "image_base64": None
     }
+
+    # If there's an image, encode it to base64
+    if last_request['image_path'] and os.path.exists(last_request['image_path']):
+        try:
+            with open(last_request['image_path'], 'rb') as img_file:
+                img_data = img_file.read()
+                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                response_data['image_base64'] = img_base64
+        except Exception as e:
+            print(f"Error reading image file: {str(e)}")
 
     # Mark request as read
     last_request['has_been_read'] = True

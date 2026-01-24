@@ -347,7 +347,7 @@ def get_request_status():
         print(f"An error occurred during request status retrieval: {str(e)}")
         return False, None
 
-def get_last_request():
+def get_last_request(save_image_to_file=None):
     """Get the last request from Android client and mark it as read"""
     url = f"{SERVER_URL}/get_last_request"
 
@@ -374,10 +374,20 @@ def get_last_request():
         if response.status_code == 200:
             request_data = response.json()
             text = request_data.get('text', 'None')
-            image_path = request_data.get('image_path', 'None')
+            image_base64 = request_data.get('image_base64', None)
 
             print(f"Request text: {text}")
-            print(f"Image path: {image_path}")
+            print(f"Image available: {bool(image_base64)}")
+
+            # If image is available and save_image_to_file is specified, save the image
+            if image_base64 and save_image_to_file:
+                try:
+                    image_data = base64.b64decode(image_base64)
+                    with open(save_image_to_file, 'wb') as img_file:
+                        img_file.write(image_data)
+                    print(f"Image saved to {save_image_to_file}")
+                except Exception as e:
+                    print(f"Error saving image: {str(e)}")
 
             return True, request_data
         elif response.status_code == 404:
@@ -450,8 +460,8 @@ if __name__ == "__main__":
     # Get request status
     get_request_status()
 
-    # Get last request (this will mark it as read)
-    # get_last_request()
+    # Get last request and save the image
+    get_last_request(save_image_to_file="received_image.png")
 
     # Upload the specific file
     # upload_file("виноградик.png")
