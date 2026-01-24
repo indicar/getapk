@@ -463,6 +463,9 @@ if __name__ == "__main__":
     # Get last request and save the image
     get_last_request(save_image_to_file="received_image.png")
 
+    # Get request status
+    get_request_status()
+
     # Upload the specific file
     # upload_file("виноградик.png")
 
