@@ -12,7 +12,9 @@ load_dotenv()
 # Get server URL from environment variable
 SERVER_URL = os.getenv('SERVER_URL')
 if not SERVER_URL:
-    raise ValueError("SERVER_URL environment variable is not set in .env file")
+    # Default to localhost if not set
+    SERVER_URL = "http://localhost:5000"
+    print(f"SERVER_URL environment variable not set, using default: {SERVER_URL}")
 
 # Get credentials from environment variables
 API_USERNAME = os.getenv('API_USERNAME')
@@ -179,6 +181,77 @@ def check_download_capability():
         print(f"An error occurred during download capability check: {str(e)}")
         return False
 
+def set_server_url(new_url):
+    """Set a new server URL on the server"""
+    url = f"{SERVER_URL}/set_url"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending POST request to {url} to set new server URL")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        response = requests.post(url, headers=headers, data={'url': new_url})
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        # Log the response content
+        try:
+            response_json = response.json()
+            print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+        except ValueError:
+            print(f"Server response body (text): {response.text}")
+
+        if response.status_code == 200:
+            print(f"Server URL updated successfully to '{new_url}'.")
+            return True
+        else:
+            print(f"Failed to update server URL.")
+            return False
+
+    except Exception as e:
+        print(f"An error occurred during server URL update: {str(e)}")
+        return False
+
+def get_server_url():
+    """Get the current server URL from the server"""
+    url = f"{SERVER_URL}/get_url"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending GET request to {url} to get current server URL")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        response = requests.get(url, headers=headers)
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        # Log the response content
+        try:
+            response_json = response.json()
+            print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+        except ValueError:
+            print(f"Server response body (text): {response.text}")
+
+        if response.status_code == 200:
+            current_url = response.json().get('url', 'Unknown')
+            print(f"Current server URL is '{current_url}'.")
+            return True, current_url
+        else:
+            print(f"Failed to get server URL.")
+            return False, None
+
+    except Exception as e:
+        print(f"An error occurred during server URL retrieval: {str(e)}")
+        return False, None
+
 
 def check_health():
     """Check if the server is healthy"""
@@ -223,11 +296,17 @@ if __name__ == "__main__":
     # Check download capability
     # check_download_capability()
 
+    # Set new server URL on server (example)
+    set_server_url("https://new-server.example.com")
+
+    # Get current server URL from server
+    get_server_url()
+
     # Upload the specific file
-    upload_file("виноградик.png")
+    # upload_file("виноградик.png")
 
     # Download the last uploaded file with automatic filename detection
-    download_file()  # Will try to detect filename from server response
+    # download_file()  # Will try to detect filename from server response
 
     # Or download with specific filename
     # download_file("downloaded_виноградик.png")

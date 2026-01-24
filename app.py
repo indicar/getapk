@@ -26,8 +26,9 @@ if not API_USERNAME or not API_PASSWORD:
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Глобальная переменная: путь к последнему загруженному файлу
+# Глобальные переменные: путь к последнему загруженному файлу и URL сервера
 last_file_path = None
+SERVER_URL = 'http://localhost:5000'
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
@@ -148,6 +149,57 @@ def download_file():
         return jsonify({"error": "No file uploaded yet"}), 404
 
     return send_file(last_file_path, as_attachment=True)
+
+# === SET SERVER URL ===
+@app.route('/set_url', methods=['POST'])
+@require_auth
+def set_server_url():
+    """
+    Set server URL
+    ---
+    tags: [Configuration]
+    security: [{ basicAuth: [] }]
+    parameters:
+      - name: url
+        in: formData
+        type: string
+        required: true
+        description: The new server URL
+    responses:
+      200:
+        description: URL updated successfully
+      400:
+        description: Missing URL parameter
+    """
+    global SERVER_URL
+
+    new_url = request.form.get('url')
+    if not new_url:
+        return jsonify({"error": "URL parameter is required"}), 400
+
+    # Basic validation of URL format
+    if not new_url.startswith(('http://', 'https://')):
+        return jsonify({"error": "Invalid URL format. Must start with http:// or https://"}), 400
+
+    SERVER_URL = new_url
+    return jsonify({"message": "Server URL updated successfully", "url": SERVER_URL}), 200
+
+# === GET SERVER URL ===
+@app.route('/get_url', methods=['GET'])
+@require_auth
+def get_server_url():
+    """
+    Get current server URL
+    ---
+    tags: [Configuration]
+    security: [{ basicAuth: [] }]
+    responses:
+      200:
+        description: Current server URL
+    """
+    global SERVER_URL
+
+    return jsonify({"url": SERVER_URL}), 200
 
 # === HEALTH CHECK ===
 @app.route('/health', methods=['GET'])
