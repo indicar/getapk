@@ -44,6 +44,9 @@ python client.py
 - `check_download_capability()` - проверка возможности скачивания файлов с сервера
 - `set_server_url(new_url)` - установка URL сервера на сервере (через endpoint /set_url)
 - `get_server_url()` - получение текущего URL сервера с сервера (через endpoint /get_url)
+- `send_request(text=None, image_path=None)` - отправка запроса от Android клиента (через endpoint /send_request)
+- `get_request_status()` - получение статуса последнего запроса (через endpoint /request_status)
+- `get_last_request()` - получение последнего запроса и пометка его как прочитанного (через endpoint /get_last_request)
 
 При скачивании файла, если не указан путь для сохранения, имя файла будет определено автоматически:
 - Из заголовка Content-Disposition, если сервер его предоставляет
@@ -58,6 +61,9 @@ python client.py
 - `/health` - проверка работоспособности сервера
 - `/set_url` - установка URL сервера (требует аутентификацию)
 - `/get_url` - получение текущего URL сервера (требует аутентификацию)
+- `/send_request` - отправка запроса от Android клиента (текст и/или изображение) (требует аутентификацию)
+- `/request_status` - получение статуса последнего запроса (требует аутентификацию)
+- `/get_last_request` - получение последнего запроса и пометка его как прочитанного (требует аутентификацию)
 - `/docs/` - документация API (Swagger UI)
 
 Все endpoint'ы, кроме `/health` и `/docs/`, требуют базовую HTTP-аутентификацию с использованием API_USERNAME и API_PASSWORD.

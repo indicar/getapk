@@ -30,6 +30,13 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 last_file_path = None
 SERVER_URL = 'http://localhost:5000'
 
+# Глобальная переменная для хранения последнего запроса от Android клиента
+last_request = {
+    'text': None,
+    'image_path': None,
+    'has_been_read': True  # флаг, показывающий, был ли запрос уже прочитан
+}
+
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
@@ -200,6 +207,149 @@ def get_server_url():
     global SERVER_URL
 
     return jsonify({"url": SERVER_URL}), 200
+
+# === SEND REQUEST FROM ANDROID CLIENT ===
+@app.route('/send_request', methods=['POST'])
+@require_auth
+def send_request():
+    """
+    Send request from Android client (text and/or image)
+    ---
+    tags: [Request]
+    security: [{ basicAuth: [] }]
+    consumes: [multipart/form-data]
+    parameters:
+      - name: text
+        in: formData
+        type: string
+        required: false
+        description: Request text
+      - name: image
+        in: formData
+        type: file
+        required: false
+        description: Request image
+    responses:
+      200:
+        description: Request saved successfully
+      400:
+        description: No text or image provided
+    """
+    global last_request
+
+    text = request.form.get('text', '')
+    image = request.files.get('image')
+
+    # Check if at least one of text or image is provided
+    if not text and not image:
+        return jsonify({"error": "Text or image must be provided"}), 400
+
+    # Save the request
+    last_request['text'] = text
+
+    # If an image is provided, save it
+    if image:
+        # Remove previous image if exists
+        if last_request['image_path'] and os.path.exists(last_request['image_path']):
+            os.remove(last_request['image_path'])
+
+        # Generate unique filename for the image
+        filename = image.filename
+        if not filename:
+            filename = 'android_image.jpg'  # default name
+
+        # Save image to uploads folder
+        image_path = os.path.join(UPLOAD_FOLDER, filename)
+        image.save(image_path)
+        last_request['image_path'] = image_path
+    else:
+        # Clear image path if no image provided
+        if last_request['image_path'] and os.path.exists(last_request['image_path']):
+            os.remove(last_request['image_path'])
+        last_request['image_path'] = None
+
+    # Mark request as unread
+    last_request['has_been_read'] = False
+
+    return jsonify({"message": "Request saved successfully"}), 200
+
+# === GET REQUEST STATUS ===
+@app.route('/request_status', methods=['GET'])
+@require_auth
+def get_request_status():
+    """
+    Get status of the last request from Android client
+    ---
+    tags: [Request]
+    security: [{ basicAuth: [] }]
+    responses:
+      200:
+        description: Request status
+        schema:
+          type: object
+          properties:
+            has_unread_request:
+              type: boolean
+              description: Whether there is an unread request
+            text:
+              type: string
+              description: Request text
+            image_available:
+              type: boolean
+              description: Whether an image is available
+    """
+    global last_request
+
+    has_unread_request = not last_request['has_been_read']
+
+    response_data = {
+        "has_unread_request": has_unread_request,
+        "text": last_request['text'],
+        "image_available": bool(last_request['image_path'])
+    }
+
+    return jsonify(response_data), 200
+
+# === GET LAST REQUEST ===
+@app.route('/get_last_request', methods=['GET'])
+@require_auth
+def get_last_request():
+    """
+    Get the last request from Android client and mark it as read
+    ---
+    tags: [Request]
+    security: [{ basicAuth: [] }]
+    responses:
+      200:
+        description: Last request data
+        schema:
+          type: object
+          properties:
+            text:
+              type: string
+              description: Request text
+            image_path:
+              type: string
+              description: Path to the image file
+      404:
+        description: No unread request available
+    """
+    global last_request
+
+    # Check if there's an unread request
+    if last_request['has_been_read']:
+        return jsonify({"error": "No unread request available"}), 404
+
+    # Prepare response
+    response_data = {
+        "text": last_request['text'],
+        "image_path": last_request['image_path']
+    }
+
+    # Mark request as read
+    last_request['has_been_read'] = True
+
+    return jsonify(response_data), 200
 
 # === HEALTH CHECK ===
 @app.route('/health', methods=['GET'])

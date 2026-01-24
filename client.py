@@ -252,6 +252,144 @@ def get_server_url():
         print(f"An error occurred during server URL retrieval: {str(e)}")
         return False, None
 
+def send_request(text=None, image_path=None):
+    """Send request from Android client (text and/or image)"""
+    url = f"{SERVER_URL}/send_request"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending POST request to {url} to send request")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        # Prepare data and files
+        data = {}
+        files = {}
+
+        if text:
+            data['text'] = text
+
+        if image_path:
+            with open(image_path, 'rb') as img_file:
+                files['image'] = (os.path.basename(image_path), img_file, 'application/octet-stream')
+
+        # If neither text nor image is provided, raise an error
+        if not text and not image_path:
+            print("Error: Either text or image_path must be provided")
+            return False
+
+        response = requests.post(url, headers=headers, data=data, files=files)
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        # Log the response content
+        try:
+            response_json = response.json()
+            print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+        except ValueError:
+            print(f"Server response body (text): {response.text}")
+
+        if response.status_code == 200:
+            print(f"Request sent successfully.")
+            return True
+        else:
+            print(f"Failed to send request.")
+            return False
+
+    except Exception as e:
+        print(f"An error occurred during request sending: {str(e)}")
+        return False
+
+def get_request_status():
+    """Get status of the last request from Android client"""
+    url = f"{SERVER_URL}/request_status"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending GET request to {url} to get request status")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        response = requests.get(url, headers=headers)
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        # Log the response content
+        try:
+            response_json = response.json()
+            print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+        except ValueError:
+            print(f"Server response body (text): {response.text}")
+
+        if response.status_code == 200:
+            status_info = response.json()
+            has_unread = status_info.get('has_unread_request', False)
+            text = status_info.get('text', 'None')
+            image_available = status_info.get('image_available', False)
+
+            print(f"Has unread request: {has_unread}")
+            print(f"Request text: {text}")
+            print(f"Image available: {image_available}")
+
+            return True, status_info
+        else:
+            print(f"Failed to get request status.")
+            return False, None
+
+    except Exception as e:
+        print(f"An error occurred during request status retrieval: {str(e)}")
+        return False, None
+
+def get_last_request():
+    """Get the last request from Android client and mark it as read"""
+    url = f"{SERVER_URL}/get_last_request"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending GET request to {url} to get last request")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        response = requests.get(url, headers=headers)
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        # Log the response content
+        try:
+            response_json = response.json()
+            print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+        except ValueError:
+            print(f"Server response body (text): {response.text}")
+
+        if response.status_code == 200:
+            request_data = response.json()
+            text = request_data.get('text', 'None')
+            image_path = request_data.get('image_path', 'None')
+
+            print(f"Request text: {text}")
+            print(f"Image path: {image_path}")
+
+            return True, request_data
+        elif response.status_code == 404:
+            print("No unread request available.")
+            return False, None
+        else:
+            print(f"Failed to get last request.")
+            return False, None
+
+    except Exception as e:
+        print(f"An error occurred during last request retrieval: {str(e)}")
+        return False, None
+
 
 def check_health():
     """Check if the server is healthy"""
@@ -296,11 +434,23 @@ if __name__ == "__main__":
     # Check download capability
     # check_download_capability()
 
-    # Set new server URL on server (example)
-    set_server_url("https://new-server.example.com")
-
     # Get current server URL from server
-    get_server_url()
+    # get_server_url()
+
+    # Set new server URL on server (example)
+    # set_server_url("https://new-server.example.com")
+
+    # Send a request from Android client (text only)
+    # send_request(text="Hello from Android client!")
+
+    # Send a request from Android client (text and image)
+    # send_request(text="Request with image", image_path="виноградик.png")
+
+    # Get request status
+    # get_request_status()
+
+    # Get last request (this will mark it as read)
+    # get_last_request()
 
     # Upload the specific file
     # upload_file("виноградик.png")
