@@ -149,6 +149,19 @@ def download_file():
 
     return send_file(last_file_path, as_attachment=True)
 
+# === HEALTH CHECK ===
+@app.route('/health', methods=['GET'])
+def health_check():
+    """
+    Health check endpoint
+    ---
+    tags: [Health]
+    responses:
+      200:
+        description: Server is alive
+    """
+    return jsonify({"status": "healthy", "message": "Server is running"}), 200
+
 # === ЗАПУСК ===
 if __name__ == '__main__':
     import os
