@@ -264,23 +264,24 @@ def send_request(text=None, image_path=None):
     print(f"Authorization header: {headers['Authorization']}")
 
     try:
-        # Prepare data and files
+        # Prepare data
         data = {}
-        files = {}
 
         if text:
             data['text'] = text
-
-        if image_path:
-            with open(image_path, 'rb') as img_file:
-                files['image'] = (os.path.basename(image_path), img_file, 'application/octet-stream')
 
         # If neither text nor image is provided, raise an error
         if not text and not image_path:
             print("Error: Either text or image_path must be provided")
             return False
 
-        response = requests.post(url, headers=headers, data=data, files=files)
+        # Handle file separately to avoid closing issue
+        if image_path:
+            with open(image_path, 'rb') as img_file:
+                files = {'image': (os.path.basename(image_path), img_file, 'application/octet-stream')}
+                response = requests.post(url, headers=headers, data=data, files=files)
+        else:
+            response = requests.post(url, headers=headers, data=data)
 
         print(f"Server response status code: {response.status_code}")
         print(f"Server response headers: {dict(response.headers)}")
@@ -441,7 +442,7 @@ if __name__ == "__main__":
     # set_server_url("https://new-server.example.com")
 
     # Send a request from Android client (text only)
-    send_request(text="Hello from Android client!")
+    # send_request(text="Hello from Android client!")
 
     # Send a request from Android client (text and image)
     send_request(text="Request with image", image_path="виноградик.png")
@@ -450,7 +451,7 @@ if __name__ == "__main__":
     get_request_status()
 
     # Get last request (this will mark it as read)
-    get_last_request()
+    # get_last_request()
 
     # Upload the specific file
     # upload_file("виноградик.png")
