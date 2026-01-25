@@ -34,8 +34,13 @@ SERVER_URL = 'http://localhost:5000'
 last_request = {
     'text': None,
     'image_path': None,
-    'has_been_read': True  # флаг, показывающий, был ли запрос уже прочитан
+    'has_been_read': True,  # флаг, показывающий, был ли запрос уже прочитан
+    'processing_status': 'received',  # статус обработки запроса ('received', 'processing', 'completed', 'failed')
+    'result': None  # результат обработки запроса
 }
+
+# Глобальная переменная для хранения ID последнего запроса
+last_request_id = None
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
@@ -303,7 +308,7 @@ def send_request():
       400:
         description: No text or image provided
     """
-    global last_request
+    global last_request, last_request_id
 
     text = request.form.get('text', '')
     image = request.files.get('image')
@@ -339,7 +344,58 @@ def send_request():
     # Mark request as unread
     last_request['has_been_read'] = False
 
-    return jsonify({"message": "Request saved successfully"}), 200
+    # Generate a new request ID and set processing status to 'received'
+    import uuid
+    last_request_id = str(uuid.uuid4())
+    last_request['processing_status'] = 'received'
+    last_request['result'] = None  # Clear any previous result
+
+    return jsonify({"message": "Request saved successfully", "request_id": last_request_id}), 200
+
+# === UPDATE REQUEST PROCESSING STATUS ===
+@app.route('/update_request_status', methods=['POST'])
+@require_auth
+def update_request_status():
+    """
+    Update the processing status of the current request
+    ---
+    tags: [Request]
+    security: [{ basicAuth: [] }]
+    parameters:
+      - name: status
+        in: formData
+        type: string
+        required: true
+        description: New processing status (received, processing, completed, failed)
+      - name: result
+        in: formData
+        type: string
+        required: false
+        description: Result of the processing
+    responses:
+      200:
+        description: Status updated successfully
+      400:
+        description: Invalid status provided
+    """
+    global last_request
+
+    new_status = request.form.get('status')
+    result = request.form.get('result')
+
+    # Validate the status
+    valid_statuses = ['received', 'processing', 'completed', 'failed']
+    if new_status not in valid_statuses:
+        return jsonify({"error": f"Invalid status. Valid statuses are: {', '.join(valid_statuses)}"}), 400
+
+    # Update the status
+    last_request['processing_status'] = new_status
+
+    # If a result is provided, store it
+    if result is not None:
+        last_request['result'] = result
+
+    return jsonify({"message": "Status updated successfully", "request_id": last_request_id, "new_status": new_status}), 200
 
 # === GET REQUEST STATUS ===
 @app.route('/request_status', methods=['GET'])
@@ -426,6 +482,94 @@ def get_last_request():
 
     # Mark request as read
     last_request['has_been_read'] = True
+
+    return jsonify(response_data), 200
+
+# === POLL REQUEST PROCESSING STATUS ===
+@app.route('/poll_request_status', methods=['GET'])
+@require_auth
+def poll_request_status():
+    """
+    Poll the processing status of the last request from Android client (lightweight response)
+    ---
+    tags: [Request]
+    security: [{ basicAuth: [] }]
+    responses:
+      200:
+        description: Request processing status (minimal data)
+        schema:
+          type: object
+          properties:
+            request_id:
+              type: string
+              description: ID of the request
+            processing_status:
+              type: string
+              description: Current processing status (received, processing, completed, failed)
+            has_result:
+              type: boolean
+              description: Whether a result is available
+      204:
+        description: No active request to poll
+    """
+    global last_request, last_request_id
+
+    # If there's no active request, return 204 (No Content) to save bandwidth
+    if last_request_id is None or last_request['processing_status'] == 'received' and last_request['has_been_read']:
+        return '', 204
+
+    # Return only essential information to minimize bandwidth
+    response_data = {
+        "request_id": last_request_id,
+        "processing_status": last_request['processing_status'],
+        "has_result": last_request['result'] is not None
+    }
+
+    return jsonify(response_data), 200
+
+# === GET REQUEST RESULT ===
+@app.route('/get_request_result', methods=['GET'])
+@require_auth
+def get_request_result():
+    """
+    Get the result of the last processed request and update status to received
+    ---
+    tags: [Request]
+    security: [{ basicAuth: [] }]
+    responses:
+      200:
+        description: Request result data
+        schema:
+          type: object
+          properties:
+            request_id:
+              type: string
+              description: ID of the request
+            processing_status:
+              type: string
+              description: Current processing status
+            result:
+              type: string
+              description: Result of the request processing
+      404:
+        description: No result available for the request
+    """
+    global last_request, last_request_id
+
+    # Check if there's a result available
+    if last_request['result'] is None:
+        return jsonify({"error": "No result available for the request"}), 404
+
+    # Prepare response with only essential data
+    response_data = {
+        "request_id": last_request_id,
+        "processing_status": last_request['processing_status'],
+        "result": last_request['result']
+    }
+
+    # Update status to "received" after result is retrieved
+    last_request['processing_status'] = 'received'
+    last_request['result'] = None  # Clear the result after retrieval
 
     return jsonify(response_data), 200
 

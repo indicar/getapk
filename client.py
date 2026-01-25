@@ -401,6 +401,140 @@ def get_last_request(save_image_to_file=None):
         print(f"An error occurred during last request retrieval: {str(e)}")
         return False, None
 
+def poll_request_status():
+    """Poll the processing status of the last request from Android client (lightweight)"""
+    url = f"{SERVER_URL}/poll_request_status"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending GET request to {url} to poll request status")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        response = requests.get(url, headers=headers)
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        if response.status_code == 200:
+            # Log the response content only when there's data
+            try:
+                response_json = response.json()
+                print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+            except ValueError:
+                print(f"Server response body (text): {response.text}")
+
+            status_info = response.json()
+            request_id = status_info.get('request_id', 'Unknown')
+            processing_status = status_info.get('processing_status', 'Unknown')
+            has_result = status_info.get('has_result', False)
+
+            print(f"Request ID: {request_id}")
+            print(f"Processing status: {processing_status}")
+            print(f"Has result: {has_result}")
+
+            return True, status_info
+        elif response.status_code == 204:
+            # No active request to poll - lightweight response
+            print("No active request to poll (204 No Content)")
+            return True, None  # Return True but with no data
+        else:
+            print(f"Failed to poll request status.")
+            return False, None
+
+    except Exception as e:
+        print(f"An error occurred during request status polling: {str(e)}")
+        return False, None
+
+def get_request_result():
+    """Get the result of the last processed request"""
+    url = f"{SERVER_URL}/get_request_result"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending GET request to {url} to get request result")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        response = requests.get(url, headers=headers)
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        # Log the response content
+        try:
+            response_json = response.json()
+            print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+        except ValueError:
+            print(f"Server response body (text): {response.text}")
+
+        if response.status_code == 200:
+            result_data = response.json()
+            request_id = result_data.get('request_id', 'Unknown')
+            processing_status = result_data.get('processing_status', 'Unknown')
+            result = result_data.get('result', 'No result')
+
+            print(f"Request ID: {request_id}")
+            print(f"Processing status: {processing_status}")
+            print(f"Result: {result}")
+
+            return True, result_data
+        elif response.status_code == 404:
+            print("No result available for the request.")
+            return False, None
+        else:
+            print(f"Failed to get request result.")
+            return False, None
+
+    except Exception as e:
+        print(f"An error occurred during request result retrieval: {str(e)}")
+        return False, None
+
+def update_request_status(status, result=None):
+    """Update the processing status of the current request"""
+    url = f"{SERVER_URL}/update_request_status"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    print(f"Sending POST request to {url} to update request status")
+    print(f"Authorization header: {headers['Authorization']}")
+
+    try:
+        data = {'status': status}
+        if result:
+            data['result'] = result
+
+        response = requests.post(url, headers=headers, data=data)
+
+        print(f"Server response status code: {response.status_code}")
+        print(f"Server response headers: {dict(response.headers)}")
+
+        # Log the response content
+        try:
+            response_json = response.json()
+            print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+        except ValueError:
+            print(f"Server response body (text): {response.text}")
+
+        if response.status_code == 200:
+            print(f"Request status updated to '{status}' successfully.")
+            if result:
+                print(f"Result added: {result}")
+            return True
+        else:
+            print(f"Failed to update request status.")
+            return False
+
+    except Exception as e:
+        print(f"An error occurred during request status update: {str(e)}")
+        return False
+
 
 def upload_file_with_public_link(file_path, expiration_hours=1):
     """Upload a file to the server and get a public download link"""
@@ -513,13 +647,60 @@ if __name__ == "__main__":
     # Get request status
     # get_request_status()
 
+    # Poll request processing status
+    # poll_request_status()
+
+    # Get request result
+    # get_request_result()
+
+    # Update request status (example)
+    # update_request_status('processing', 'Processing the request...')
+
+    # Example of complete workflow with lightweight polling
+    # Uncomment the following lines to test the complete workflow:
+
+    success = send_request(text="Test request for LLM processing")
+    if success:
+        print("Request sent successfully, now polling for status...")
+
+        # Poll for status updates (lightweight - minimal data transfer)
+        import time
+        max_poll_attempts = 20  # Limit polling attempts
+        attempt = 0
+
+        while attempt < max_poll_attempts:
+            success, status_info = poll_request_status()
+            if success and status_info:  # If there's status info available
+                print(f"Attempt {attempt + 1}: Status is {status_info.get('processing_status')}")
+                if status_info.get('processing_status') == 'completed':
+                    print("Request processing completed, fetching result...")
+                    # Get the final result when processing is complete
+                    result_success, result_data = get_request_result()
+                    if result_success:
+                        print(f"Received result: {result_data.get('result')}")
+                        break
+                elif status_info.get('processing_status') == 'failed':
+                    print("Request processing failed")
+                    break
+            elif success and status_info is None:
+                # Got 204 No Content - no active request to poll
+                print(f"Attempt {attempt + 1}: No active request to poll")
+            else:
+                print(f"Attempt {attempt + 1}: Failed to poll status")
+
+            attempt += 1
+            time.sleep(2)  # Wait 2 seconds between polls
+    else:
+        print("Failed to send request")
+
+
     # Upload the specific file
     # upload_file("виноградик.png")
 
     # Upload file and get public download link
-    success, public_url = upload_file_with_public_link("виноградик.png")
-    if success and public_url:
-        print(f"Try downloading using the public link (without authentication): {public_url}")
+    # success, public_url = upload_file_with_public_link("виноградик.png")
+    # if success and public_url:
+    #     print(f"Try downloading using the public link (without authentication): {public_url}")
 
     # Download the last uploaded file with automatic filename detection
     # download_file()  # Will try to detect filename from server response
