@@ -402,6 +402,53 @@ def get_last_request(save_image_to_file=None):
         return False, None
 
 
+def upload_file_with_public_link(file_path, expiration_hours=1):
+    """Upload a file to the server and get a public download link"""
+    url = f"{SERVER_URL}/upload"
+
+    headers = {
+        'Authorization': create_auth_header()
+    }
+
+    try:
+        with open(file_path, 'rb') as file:
+            files = {'file': (os.path.basename(file_path), file, 'application/octet-stream')}
+            print(f"Sending POST request to {url}")
+            print(f"Authorization header: {headers['Authorization']}")
+            response = requests.post(url, files=files, headers=headers)
+
+            print(f"Server response status code: {response.status_code}")
+            print(f"Server response headers: {dict(response.headers)}")
+
+            # Log the response content
+            try:
+                response_json = response.json()
+                print(f"Server response body (JSON): {json.dumps(response_json, indent=2)}")
+
+                if response.status_code == 200:
+                    print(f"File '{file_path}' uploaded successfully!")
+                    if 'public_url' in response_json:
+                        print(f"Public download link: {response_json['public_url']}")
+                        print(f"Link expires at: {response_json['expires_at']}")
+                        return True, response_json['public_url']
+                    else:
+                        print("Warning: Public download link not returned by server")
+                        return True, None
+                else:
+                    print(f"Failed to upload file.")
+                    return False, None
+            except ValueError:
+                print(f"Server response body (text): {response.text}")
+                return False, None
+
+    except FileNotFoundError:
+        print(f"File '{file_path}' not found.")
+        return False, None
+    except Exception as e:
+        print(f"An error occurred during upload: {str(e)}")
+        return False, None
+
+
 def check_health():
     """Check if the server is healthy"""
     url = f"{SERVER_URL}/health"
@@ -455,19 +502,24 @@ if __name__ == "__main__":
     # send_request(text="Hello from Android client!")
 
     # Send a request from Android client (text and image)
-    send_request(text="Request with image", image_path="виноградик.png")
+    # send_request(text="Request with image", image_path="виноградик.png")
 
     # Get request status
-    get_request_status()
+    # get_request_status()
 
     # Get last request and save the image
-    get_last_request(save_image_to_file="received_image.png")
+    # get_last_request(save_image_to_file="received_image.png")
 
     # Get request status
-    get_request_status()
+    # get_request_status()
 
     # Upload the specific file
     # upload_file("виноградик.png")
+
+    # Upload file and get public download link
+    success, public_url = upload_file_with_public_link("виноградик.png")
+    if success and public_url:
+        print(f"Try downloading using the public link (without authentication): {public_url}")
 
     # Download the last uploaded file with automatic filename detection
     # download_file()  # Will try to detect filename from server response

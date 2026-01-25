@@ -92,6 +92,13 @@ def require_auth(f):
     return decorated
 
 # === ЗАГРУЗКА ===
+import uuid
+from datetime import datetime, timedelta
+
+# Глобальная переменная для хранения информации о доступе к файлу
+file_access_token = None
+file_access_expiration = None
+
 @app.route('/upload', methods=['POST'])
 @require_auth
 def upload_file():
@@ -109,10 +116,29 @@ def upload_file():
     responses:
       200:
         description: OK
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              description: Upload status message
+            filename:
+              type: string
+              description: Name of uploaded file
+            url:
+              type: string
+              description: Authenticated download URL
+            public_url:
+              type: string
+              description: Public download URL (valid for limited time)
+            expires_at:
+              type: string
+              format: date-time
+              description: Time when public URL expires
       400:
         description: No file
     """
-    global last_file_path
+    global last_file_path, file_access_token, file_access_expiration
 
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
@@ -129,11 +155,53 @@ def upload_file():
     last_file_path = os.path.join(UPLOAD_FOLDER, filename)
     file.save(last_file_path)
 
+    # Создаем токен и устанавливаем время его действия (по умолчанию 1 час)
+    file_access_token = str(uuid.uuid4())
+    file_access_expiration = datetime.now() + timedelta(hours=1)
+
+    # Формируем публичную ссылку для скачивания
+    public_download_url = f"{request.url_root}public_download/{file_access_token}"
+
     return jsonify({
         "message": "File uploaded successfully",
         "filename": filename,
-        "url": "/download"
+        "url": "/download",
+        "public_url": public_download_url,
+        "expires_at": file_access_expiration.isoformat()
     }), 200
+
+
+# === СКАЧИВАНИЕ БЕЗ АВТОРИЗАЦИИ ===
+@app.route('/public_download/<token>', methods=['GET'])
+def public_download_file(token):
+    """
+    Public download the latest uploaded file using a token
+    ---
+    tags: [File]
+    parameters:
+      - name: token
+        in: path
+        type: string
+        required: true
+        description: Access token for downloading the file
+    responses:
+      200:
+        description: File
+      404:
+        description: No file uploaded yet
+      403:
+        description: Invalid or expired token
+    """
+    global last_file_path, file_access_token, file_access_expiration
+
+    # Проверяем, действителен ли токен и не истекло ли время его действия
+    if not file_access_token or token != file_access_token or datetime.now() > file_access_expiration:
+        return jsonify({"error": "Invalid or expired token"}), 403
+
+    if not last_file_path or not os.path.exists(last_file_path):
+        return jsonify({"error": "No file uploaded yet"}), 404
+
+    return send_file(last_file_path, as_attachment=True)
 
 # === СКАЧИВАНИЕ ===
 @app.route('/download', methods=['GET'])
