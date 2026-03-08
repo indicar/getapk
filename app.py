@@ -2,6 +2,7 @@ from flask import Flask, request, send_file, jsonify
 import os
 import base64
 import shutil
+import json
 from functools import wraps
 from flasgger import Swagger
 from dotenv import load_dotenv
@@ -25,6 +26,31 @@ if not API_USERNAME or not API_PASSWORD:
 # === КОНФИГУРАЦИЯ ===
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# === NOTES STORAGE ===
+NOTES_FILE = 'notes_data.json'
+
+# Загружаем заметки при старте
+def load_notes():
+    """Загрузка заметок из файла"""
+    try:
+        if os.path.exists(NOTES_FILE):
+            with open(NOTES_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading notes: {e}")
+    return {}
+
+def save_notes(notes):
+    """Сохранение заметок в файл"""
+    try:
+        with open(NOTES_FILE, 'w') as f:
+            json.dump(notes, f)
+    except Exception as e:
+        print(f"Error saving notes: {e}")
+
+# Глобальное хранилище заметок
+notes_storage = load_notes()
 
 # Глобальные переменные: путь к последнему загруженному файлу и URL сервера
 last_file_path = None
@@ -573,6 +599,152 @@ def get_request_result():
 
     return jsonify(response_data), 200
 
+# === NOTES BACKUP ENDPOINTS ===
+
+@app.route('/notes/<user_token>', methods=['POST'])
+def upload_notes(user_token):
+    """
+    Upload encrypted notes for a user
+    ---
+    tags: [Notes]
+    consumes: [application/json]
+    parameters:
+      - name: user_token
+        in: path
+        type: string
+        required: true
+        description: User token (email or unique ID)
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            encryptedData:
+              type: string
+              description: Encrypted notes data (base64)
+            iv:
+              type: string
+              description: Initialization vector (base64)
+            version:
+              type: integer
+              description: Backup version
+    responses:
+      200:
+        description: Notes uploaded successfully
+      400:
+        description: Invalid data
+    """
+    global notes_storage
+    
+    try:
+        data = request.get_json()
+        
+        if not data or 'encryptedData' not in data or 'iv' not in data:
+            return jsonify({'error': 'Missing encryptedData or iv'}), 400
+        
+        # Сохраняем зашифрованные данные
+        notes_storage[user_token] = {
+            'encryptedData': data['encryptedData'],
+            'iv': data['iv'],
+            'version': data.get('version', 1)
+        }
+        
+        save_notes(notes_storage)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Notes uploaded successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/notes/<user_token>', methods=['GET'])
+def download_notes(user_token):
+    """
+    Download encrypted notes for a user
+    ---
+    tags: [Notes]
+    parameters:
+      - name: user_token
+        in: path
+        type: string
+        required: true
+        description: User token (email or unique ID)
+    responses:
+      200:
+        description: Encrypted notes data
+      404:
+        description: No notes found for this user
+    """
+    global notes_storage
+    
+    if user_token not in notes_storage:
+        return jsonify({'error': 'No notes found for this user'}), 404
+    
+    return jsonify(notes_storage[user_token])
+
+
+@app.route('/notes/<user_token>', methods=['DELETE'])
+def delete_notes(user_token):
+    """
+    Delete notes for a user
+    ---
+    tags: [Notes]
+    parameters:
+      - name: user_token
+        in: path
+        type: string
+        required: true
+        description: User token (email or unique ID)
+    responses:
+      200:
+        description: Notes deleted successfully
+      404:
+        description: No notes found
+    """
+    global notes_storage
+    
+    if user_token in notes_storage:
+        del notes_storage[user_token]
+        save_notes(notes_storage)
+        return jsonify({'success': True, 'message': 'Notes deleted'})
+    else:
+        return jsonify({'error': 'No notes found'}), 404
+
+
+@app.route('/notes/<user_token>/status', methods=['GET'])
+def check_notes_status(user_token):
+    """
+    Check if notes exist for a user
+    ---
+    tags: [Notes]
+    parameters:
+      - name: user_token
+        in: path
+        type: string
+        required: true
+        description: User token (email or unique ID)
+    responses:
+      200:
+        description: Status information
+    """
+    global notes_storage
+    
+    if user_token in notes_storage:
+        return jsonify({
+            'exists': True,
+            'has_notes': True
+        })
+    else:
+        return jsonify({
+            'exists': False,
+            'has_notes': False
+        })
+
+
 # === HEALTH CHECK ===
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -584,7 +756,11 @@ def health_check():
       200:
         description: Server is alive
     """
-    return jsonify({"status": "healthy", "message": "Server is running"}), 200
+    return jsonify({
+        "status": "healthy", 
+        "message": "Server is running",
+        "notes_users": len(notes_storage)
+    }), 200
 
 # === ЗАПУСК ===
 if __name__ == '__main__':

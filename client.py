@@ -535,6 +535,71 @@ def update_request_status(status, result=None):
         print(f"An error occurred during request status update: {str(e)}")
         return False
 
+def simulate_llm_processor():
+    """Simulate the LLM Processor that polls for requests and processes them"""
+    print("Starting LLM Processor simulation...")
+
+    import time
+    import random
+
+    try:
+        while True:
+            print("\n--- Polling for new requests ---")
+
+            # Get all requests that are in 'received' status (new requests)
+            # We'll use the request_status endpoint to check if there are unread requests
+            url = f"{SERVER_URL}/request_status"
+            headers = {'Authorization': create_auth_header()}
+
+            response = requests.get(url, headers=headers)
+
+            if response.status_code == 200:
+                status_data = response.json()
+                has_unread = status_data.get('has_unread_request', False)
+
+                if has_unread:
+                    print("New request found! Retrieving request...")
+
+                    # Get the full request details
+                    get_req_url = f"{SERVER_URL}/get_last_request"
+                    req_response = requests.get(get_req_url, headers=headers)
+
+                    if req_response.status_code == 200:
+                        request_data = req_response.json()
+                        request_text = request_data.get('text', '')
+
+                        print(f"Processing request: {request_text}")
+
+                        # Update status to processing
+                        update_request_status('processing')
+
+                        # Simulate processing time
+                        processing_time = random.randint(3, 8)  # Random processing time 3-8 seconds
+                        print(f"Simulating processing for {processing_time} seconds...")
+                        time.sleep(processing_time)
+
+                        # Generate a simulated result
+                        simulated_result = f"Processed: '{request_text[:50]}...' - This is a simulated response from the LLM processor."
+
+                        # Update status to completed with result
+                        update_request_status('completed', simulated_result)
+
+                        print(f"Request processed successfully!")
+                    else:
+                        print("Failed to retrieve request details")
+                else:
+                    print("No new requests found")
+            else:
+                print("Failed to check request status")
+
+            # Wait before next poll
+            time.sleep(5)  # Poll every 5 seconds
+
+    except KeyboardInterrupt:
+        print("\nLLM Processor simulation stopped by user")
+    except Exception as e:
+        print(f"Error in LLM Processor simulation: {str(e)}")
+
 
 def upload_file_with_public_link(file_path, expiration_hours=1):
     """Upload a file to the server and get a public download link"""
@@ -707,3 +772,6 @@ if __name__ == "__main__":
 
     # Or download with specific filename
     # download_file("downloaded_виноградик.png")
+
+    # Run LLM Processor simulation (uncomment to test)
+    simulate_llm_processor()
