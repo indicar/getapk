@@ -757,10 +757,171 @@ def health_check():
         description: Server is alive
     """
     return jsonify({
-        "status": "healthy", 
+        "status": "healthy",
         "message": "Server is running",
-        "notes_users": len(notes_storage)
+        "notes_users": len(notes_storage),
+        "signaling_users": len(signaling_storage),
+        "signals_count": sum(len(v) for v in signaling_storage.values())
     }), 200
+
+# === SIGNALING (замена Firebase) ===
+signaling_storage = {}  # {userId: [signals]}
+online_users = {}  # {userId: nickname}
+
+@app.route('/api/signaling/register/<user_id>', methods=['POST'])
+def register_user(user_id):
+    """Register user for signaling"""
+    nickname = request.args.get('nickname', user_id)
+    if user_id not in signaling_storage:
+        signaling_storage[user_id] = []
+    online_users[user_id] = nickname
+    return jsonify({"success": True}), 200
+
+@app.route('/api/signaling/online/<user_id>', methods=['POST'])
+def set_online(user_id):
+    """Set user online status"""
+    online = request.args.get('online', 'true').lower() == 'true'
+    if online:
+        online_users[user_id] = request.args.get('nickname', user_id)
+    else:
+        online_users.pop(user_id, None)
+    return jsonify({"success": True}), 200
+
+@app.route('/api/signaling/<user_id>', methods=['POST'])
+def send_signal(user_id):
+    """Send signal to user"""
+    data = request.get_json()
+    if user_id not in signaling_storage:
+        signaling_storage[user_id] = []
+    signaling_storage[user_id].append(data)
+    # Keep only last 100 signals per user
+    if len(signaling_storage[user_id]) > 100:
+        signaling_storage[user_id] = signaling_storage[user_id][-100:]
+    return '', 200
+
+@app.route('/api/signaling/<user_id>', methods=['GET'])
+def get_signals(user_id):
+    """Get signals for user"""
+    since = request.args.get('since', 0, type=int)
+    signals = signaling_storage.get(user_id, [])
+    # Filter signals since timestamp
+    new_signals = [s for s in signals if s.get('timestamp', 0) > since]
+    return jsonify(new_signals), 200
+
+@app.route('/api/users/online', methods=['GET'])
+def get_online_users():
+    """Get all online users"""
+    return jsonify(online_users), 200
+
+# === TURN CREDENTIALS ===
+@app.route('/turn_credentials', methods=['GET'])
+def get_turn_credentials():
+    """
+    Get TURN/STUN server credentials for WebRTC
+    ---
+    tags: [WebRTC]
+    responses:
+      200:
+        description: TURN/STUN credentials
+        schema:
+          type: object
+          properties:
+            iceServers:
+              type: array
+              items:
+                type: object
+    """
+    # STUN сервера (бесплатные Google)
+    # TURN сервера - используй свои или metered.ca
+    ice_servers = [
+        {"urls": "stun:stun.l.google.com:19302"},
+        {"urls": "stun:stun1.l.google.com:19302"},
+        {"urls": "stun:stun2.l.google.com:19302"},
+        # TURN сервера (замени на свои)
+        {
+            "urls": ["turn:appp.metered.ca:80?transport=tcp", "turn:appp.metered.ca:443?transport=tcp"],
+            "username": "e87750020052a6fdd244ef0d",
+            "credential": "9SNLVc6Ji/ti7aJg"
+        }
+    ]
+    return jsonify({"iceServers": ice_servers}), 200
+
+# === APK UPLOAD (с авторизацией) ===
+@app.route('/upload_apk', methods=['POST'])
+@require_auth
+def upload_apk():
+    """
+    Upload new APK file (replaces previous)
+    ---
+    tags: [APK]
+    security: [{ basicAuth: [] }]
+    consumes: [multipart/form-data]
+    parameters:
+      - name: apk
+        in: formData
+        type: file
+        required: true
+        description: APK file to upload
+    responses:
+      200:
+        description: APK uploaded successfully
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            filename:
+              type: string
+            download_url:
+              type: string
+      400:
+        description: No APK file provided
+    """
+    if 'apk' not in request.files:
+        return jsonify({"error": "No APK file part"}), 400
+    
+    apk_file = request.files['apk']
+    if apk_file.filename == '' or not apk_file.filename.endswith('.apk'):
+        return jsonify({"error": "File must be an APK (.apk)"}), 400
+    
+    # Удаляем предыдущий APK
+    apk_path = os.path.join(UPLOAD_FOLDER, 'latest.apk')
+    if os.path.exists(apk_path):
+        os.remove(apk_path)
+    
+    # Сохраняем новый APK
+    apk_file.save(apk_path)
+    
+    # Публичная ссылка для скачивания
+    download_url = f"{request.url_root}download_apk"
+    
+    return jsonify({
+        "message": "APK uploaded successfully",
+        "filename": apk_file.filename,
+        "download_url": download_url
+    }), 200
+
+# === APK DOWNLOAD (без авторизации - публичный) ===
+@app.route('/download_apk', methods=['GET'])
+def download_apk():
+    """
+    Download the latest APK (public, no auth required)
+    ---
+    tags: [APK]
+    responses:
+      200:
+        description: APK file
+      404:
+        description: No APK uploaded yet
+    """
+    apk_path = os.path.join(UPLOAD_FOLDER, 'latest.apk')
+    if not os.path.exists(apk_path):
+        return jsonify({"error": "No APK uploaded yet. Upload one first via /upload_apk"}), 404
+    
+    return send_file(apk_path, 
+                     as_attachment=True, 
+                     download_name='messenger-p2p.apk',
+                     mimetype='application/vnd.android.package-archive')
 
 # === ЗАПУСК ===
 if __name__ == '__main__':
