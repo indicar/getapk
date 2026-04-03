@@ -813,6 +813,63 @@ def get_online_users():
     """Get all online users"""
     return jsonify(online_users), 200
 
+# === FILE TRANSFER (через сервер) ===
+file_transfers = {}  # {file_id: {"from": user, "to": user, "filename": str, "data": bytes}}
+
+@app.route('/api/files/upload', methods=['POST'])
+def upload_file_transfer():
+    """Upload file for transfer to another user"""
+    import uuid
+    if 'file' not in request.files:
+        return jsonify({"error": "No file"}), 400
+    
+    file = request.files['file']
+    to_user = request.form.get('to')
+    from_user = request.form.get('from')
+    
+    if not to_user or not from_user:
+        return jsonify({"error": "Missing from/to"}), 400
+    
+    file_id = str(uuid.uuid4())
+    file_data = file.read()
+    file_transfers[file_id] = {
+        "from": from_user,
+        "to": to_user,
+        "filename": file.filename,
+        "data": file_data,
+        "size": len(file_data)
+    }
+    
+    return jsonify({"file_id": file_id, "filename": file.filename, "size": len(file_data)}), 200
+
+@app.route('/api/files/<file_id>', methods=['GET'])
+def download_file_transfer(file_id):
+    """Download transferred file"""
+    if file_id not in file_transfers:
+        return jsonify({"error": "File not found"}), 404
+    
+    transfer = file_transfers[file_id]
+    from io import BytesIO
+    return send_file(
+        BytesIO(transfer["data"]),
+        as_attachment=True,
+        download_name=transfer["filename"]
+    )
+
+@app.route('/api/files/pending/<user_id>', methods=['GET'])
+def get_pending_files(user_id):
+    """Get list of pending files for user"""
+    pending = []
+    for fid, transfer in file_transfers.items():
+        if transfer["to"] == user_id:
+            pending.append({
+                "file_id": fid,
+                "filename": transfer["filename"],
+                "size": transfer["size"],
+                "from": transfer["from"]
+            })
+    return jsonify(pending), 200
+
 # === TURN CREDENTIALS ===
 @app.route('/turn_credentials', methods=['GET'])
 def get_turn_credentials():
