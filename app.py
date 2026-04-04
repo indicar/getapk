@@ -1148,6 +1148,137 @@ def get_ws_online_users():
         {"userId": uid, "online": True} for uid in ws_connections.keys()
     ]), 200
 
+# === ГОЛОСОВЫЕ ЗВОНКИ ЧЕРЕЗ WEBSOCKET ===
+# Хранилище активных звонков: {call_id: {from, to, status, start_time}}
+active_calls = {}
+
+@socketio.on('call_request')
+def handle_call_request(data):
+    """Инициация звонка"""
+    from_user = data.get('from')
+    to_user = data.get('to')
+    call_id = data.get('callId', f"{from_user}_{to_user}_{int(time.time())}")
+    
+    if to_user not in ws_connections:
+        emit('call_error', {'error': 'User is offline', 'callId': call_id}, room=request.sid)
+        return
+    
+    active_calls[call_id] = {
+        'from': from_user,
+        'to': to_user,
+        'status': 'ringing',
+        'start_time': int(time.time() * 1000)
+    }
+    
+    # Отправляем входящий звонок получателю
+    emit('incoming_call', {
+        'callId': call_id,
+        'from': from_user,
+        'to': to_user
+    }, room=ws_connections[to_user])
+    
+    print(f"📞 Call request: {from_user} -> {to_user} (callId: {call_id})")
+
+@socketio.on('call_answer')
+def handle_call_answer(data):
+    """Ответ на звонок (принять/отклонить)"""
+    call_id = data.get('callId')
+    accepted = data.get('accepted', False)
+    user_id = data.get('userId')
+    
+    if call_id not in active_calls:
+        emit('call_error', {'error': 'Call not found', 'callId': call_id}, room=request.sid)
+        return
+    
+    call = active_calls[call_id]
+    # Определяем получателя (того, кто не отвечал)
+    to_sid = None
+    if call['from'] == user_id:
+        # Звонящий получает ответ
+        if call['to'] in ws_connections:
+            to_sid = ws_connections[call['to']]
+    else:
+        # Принимающий отвечает
+        if call['from'] in ws_connections:
+            to_sid = ws_connections[call['from']]
+    
+    if to_sid:
+        if accepted:
+            call['status'] = 'active'
+            emit('call_accepted', {'callId': call_id, 'accepted': True}, room=to_sid)
+            emit('call_accepted', {'callId': call_id, 'accepted': True}, room=request.sid)
+            print(f"✅ Call accepted: {call_id}")
+        else:
+            call['status'] = 'rejected'
+            emit('call_rejected', {'callId': call_id, 'accepted': False}, room=to_sid)
+            print(f"❌ Call rejected: {call_id}")
+            # Удаляем звонок
+            del active_calls[call_id]
+    else:
+        emit('call_error', {'error': 'User disconnected', 'callId': call_id}, room=request.sid)
+
+@socketio.on('call_end')
+def handle_call_end(data):
+    """Завершение звонка"""
+    call_id = data.get('callId')
+    user_id = data.get('userId')
+    
+    if call_id in active_calls:
+        call = active_calls[call_id]
+        # Уведомляем другого участника
+        other_user = call['to'] if call['from'] == user_id else call['from']
+        if other_user in ws_connections:
+            emit('call_ended', {'callId': call_id, 'endedBy': user_id}, room=ws_connections[other_user])
+        
+        print(f"📴 Call ended: {call_id} by {user_id}")
+        del active_calls[call_id]
+
+@socketio.on('audio_data')
+def handle_audio_data(data):
+    """Передача аудио-данных через сервер"""
+    call_id = data.get('callId')
+    audio_base64 = data.get('audio')  # base64-encoded PCM/opus
+    from_user = data.get('from')
+    
+    if call_id not in active_calls:
+        return
+    
+    call = active_calls[call_id]
+    if call['status'] != 'active':
+        return
+    
+    # Определяем получателя
+    to_user = call['to'] if call['from'] == from_user else call['from']
+    
+    if to_user in ws_connections:
+        # Ретранслируем аудио другому абоненту
+        emit('audio_data', {
+            'callId': call_id,
+            'audio': audio_base64,
+            'from': from_user,
+            'timestamp': int(time.time() * 1000)
+        }, room=ws_connections[to_user])
+
+@socketio.on('ice_candidate')
+def handle_ice_candidate(data):
+    """Обмен ICE-кандидатами для звонка"""
+    call_id = data.get('callId')
+    candidate = data.get('candidate')
+    from_user = data.get('from')
+    
+    if call_id not in active_calls:
+        return
+    
+    call = active_calls[call_id]
+    to_user = call['to'] if call['from'] == from_user else call['from']
+    
+    if to_user in ws_connections:
+        emit('ice_candidate', {
+            'callId': call_id,
+            'candidate': candidate,
+            'from': from_user
+        }, room=ws_connections[to_user])
+
 # === ЗАПУСК ===
 if __name__ == '__main__':
     import os
