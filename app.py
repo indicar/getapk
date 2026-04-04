@@ -3,12 +3,21 @@ import os
 import base64
 import shutil
 import json
+import time
+import random
 from functools import wraps
 from flasgger import Swagger
 from dotenv import load_dotenv
 from flask_cors import CORS
 
 # === WEBSOCKET SUPPORT ===
+# Применяем eventlet monkey patch в самом начале
+try:
+    import eventlet
+    eventlet.monkey_patch()
+except ImportError:
+    pass
+
 from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 
 # SocketIO будет инициализирован после создания app
@@ -1057,8 +1066,7 @@ def handle_signal(data):
     sdp_mline_index = data.get('sdpMLineIndex')
     
     # Генерируем уникальный ID сообщения
-    import time
-    msg_id = f"{from_user}_{to_user}_{signal_type}_{int(time.time() * 1000)}"
+    msg_id = f"{from_user}_{to_user}_{signal_type}_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
     
     signal_message = {
         'type': signal_type,
@@ -1074,14 +1082,15 @@ def handle_signal(data):
     # Если пользователь онлайн через WebSocket - отправляем сразу (с проверкой на дубликаты)
     if to_user in ws_connections:
         target_sid = ws_connections[to_user]
+        print(f"📡 User {to_user} is online (sid: {target_sid}), sending {signal_type}")
         # Проверяем, не было ли уже получено это сообщение
         user_received = received_messages.setdefault(to_user, set())
         if msg_id not in user_received:
             emit('signal', signal_message, room=target_sid)
             user_received.add(msg_id)
-            print(f"📡 Signal forwarded via WS: {signal_type} -> {to_user}")
+            print(f"📡 Signal sent: {signal_type} -> {to_user}, msgId: {msg_id}")
         else:
-            print(f"⚠️ Duplicate signal skipped: {signal_type} -> {to_user}")
+            print(f"⚠️ Duplicate signal skipped: {signal_type} -> {to_user}, msgId: {msg_id}")
     else:
         # Сохраняем для офлайн пользователей (макс 100)
         if to_user not in offline_messages:
@@ -1157,4 +1166,4 @@ if __name__ == '__main__':
     except ImportError:
         pass
     
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
