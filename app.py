@@ -83,10 +83,8 @@ app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
 # SocketIO с поддержкой long-polling и WebSocket
-# На Windows используем threading, на production - eventlet
-import platform
-async_mode = 'threading' if platform.system() == 'Windows' else 'eventlet'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode, ping_timeout=60, ping_interval=25)
+# Используем threading для совместимости
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=25)
 
 # === SWAGGER ===
 swagger_template = {
