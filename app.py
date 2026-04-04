@@ -1247,15 +1247,22 @@ def handle_audio_data(data):
     audio_base64 = data.get('audio')  # base64-encoded PCM/opus
     from_user = data.get('from')
     
+    print(f"🎵 Audio received from {from_user}, callId: {call_id}, size: {len(audio_base64) if audio_base64 else 0}")
+    
     if call_id not in active_calls:
+        print(f"   ❌ Call not found: {call_id}")
         return
     
     call = active_calls[call_id]
+    print(f"   Call status: {call.get('status')}")
+    
     if call['status'] != 'active':
+        print(f"   ❌ Call not active yet")
         return
     
     # Определяем получателя
     to_user = call['to'] if call['from'] == from_user else call['from']
+    print(f"   Forwarding to: {to_user}")
     
     if to_user in ws_connections:
         # Ретранслируем аудио другому абоненту
@@ -1265,6 +1272,9 @@ def handle_audio_data(data):
             'from': from_user,
             'timestamp': int(time.time() * 1000)
         }, room=ws_connections[to_user])
+        print(f"   ✅ Audio forwarded to {to_user}")
+    else:
+        print(f"   ❌ Recipient {to_user} not online")
 
 @socketio.on('ice_candidate')
 def handle_ice_candidate(data):
