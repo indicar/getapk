@@ -1018,6 +1018,7 @@ def handle_disconnect():
             break
     if user_id_to_remove:
         del ws_connections[user_id_to_remove]
+        online_users.pop(user_id_to_remove, None)  # Также удаляем из online_users
         print(f"🔌 Client disconnected: {user_id_to_remove}")
 
 @socketio.on('register')
@@ -1028,6 +1029,7 @@ def handle_register(data):
     
     if user_id:
         ws_connections[user_id] = request.sid
+        online_users[user_id] = nickname  # Сохраняем никнейм
         join_room(user_id)
         
         # Отправляем офлайн сообщения (с проверкой на дубликаты)
@@ -1043,7 +1045,7 @@ def handle_register(data):
             # Очищаем очередь после отправки
             offline_messages[user_id] = []
         
-        print(f"📱 User registered via WS: {user_id} (sid: {request.sid})")
+        print(f"📱 User registered via WS: {user_id} (nickname: {nickname}, sid: {request.sid})")
         emit('registered', {'userId': user_id, 'status': 'ok'})
 
 @socketio.on('signal')
@@ -1098,7 +1100,8 @@ def handle_get_online_users(data):
     """Получить список онлайн пользователей"""
     online_list = []
     for uid, sid in ws_connections.items():
-        online_list.append({'userId': uid, 'sid': sid})
+        nickname = online_users.get(uid, uid)  # Используем никнейм или UID как fallback
+        online_list.append({'userId': uid, 'nickname': nickname})
     emit('online_users', online_list)
 
 @socketio.on('set_status')
