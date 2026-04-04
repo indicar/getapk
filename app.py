@@ -1159,7 +1159,12 @@ def handle_call_request(data):
     to_user = data.get('to')
     call_id = data.get('callId', f"{from_user}_{to_user}_{int(time.time())}")
     
+    print(f"📞 Call request: {from_user} -> {to_user} (callId: {call_id})")
+    print(f"   Online users: {list(ws_connections.keys())}")
+    print(f"   To user in connections: {to_user in ws_connections}")
+    
     if to_user not in ws_connections:
+        print(f"   ❌ User {to_user} is NOT online")
         emit('call_error', {'error': 'User is offline', 'callId': call_id}, room=request.sid)
         return
     
@@ -1171,13 +1176,15 @@ def handle_call_request(data):
     }
     
     # Отправляем входящий звонок получателю
+    target_sid = ws_connections[to_user]
+    print(f"   📤 Sending incoming_call to {to_user} (sid: {target_sid})")
     emit('incoming_call', {
         'callId': call_id,
         'from': from_user,
         'to': to_user
-    }, room=ws_connections[to_user])
+    }, room=target_sid)
     
-    print(f"📞 Call request: {from_user} -> {to_user} (callId: {call_id})")
+    print(f"   ✅ Call request sent successfully")
 
 @socketio.on('call_answer')
 def handle_call_answer(data):
