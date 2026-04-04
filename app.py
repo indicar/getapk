@@ -18,6 +18,8 @@ ws_connections = {}
 
 # Очередь офлайн сообщений для пользователей
 offline_messages = {}  # {userId: [messages...]}
+# Отслеживание уже полученных сообщений для предотвращения дубликатов
+received_messages = {}  # {userId: set(message_id)}
 
 # === ЗАГРУЗКА .env ===
 print("🚀 Loading environment variables from .env...")
@@ -1026,10 +1028,17 @@ def handle_register(data):
         ws_connections[user_id] = request.sid
         join_room(user_id)
         
-        # Отправляем офлайн сообщения
+        # Отправляем офлайн сообщения (с проверкой на дубликаты)
         if user_id in offline_messages:
             for msg in offline_messages[user_id]:
-                emit('signal', msg, room=request.sid)
+                msg_id = msg.get('msgId')
+                # Проверяем, не было ли уже получено это сообщение
+                user_received = received_messages.setdefault(user_id, set())
+                if msg_id and msg_id not in user_received:
+                    emit('signal', msg, room=request.sid)
+                    user_received.add(msg_id)
+                    print(f"📬 Sent offline message: {msg.get('type')} to {user_id}")
+            # Очищаем очередь после отправки
             offline_messages[user_id] = []
         
         print(f"📱 User registered via WS: {user_id} (sid: {request.sid})")
@@ -1047,6 +1056,10 @@ def handle_signal(data):
     sdp_mid = data.get('sdpMid')
     sdp_mline_index = data.get('sdpMLineIndex')
     
+    # Генерируем уникальный ID сообщения
+    import time
+    msg_id = f"{from_user}_{to_user}_{signal_type}_{int(time.time() * 1000)}"
+    
     signal_message = {
         'type': signal_type,
         'from': from_user,
@@ -1054,14 +1067,21 @@ def handle_signal(data):
         'data': signal_data,
         'sdpMid': sdp_mid,
         'sdpMLineIndex': sdp_mline_index,
-        'timestamp': int(os.urandom(8).hex(), 16)
+        'timestamp': int(time.time() * 1000),
+        'msgId': msg_id  # Уникальный ID для дедупликации
     }
     
-    # Если пользователь онлайн через WebSocket - отправляем сразу
+    # Если пользователь онлайн через WebSocket - отправляем сразу (с проверкой на дубликаты)
     if to_user in ws_connections:
         target_sid = ws_connections[to_user]
-        emit('signal', signal_message, room=target_sid)
-        print(f"📡 Signal forwarded via WS: {signal_type} -> {to_user}")
+        # Проверяем, не было ли уже получено это сообщение
+        user_received = received_messages.setdefault(to_user, set())
+        if msg_id not in user_received:
+            emit('signal', signal_message, room=target_sid)
+            user_received.add(msg_id)
+            print(f"📡 Signal forwarded via WS: {signal_type} -> {to_user}")
+        else:
+            print(f"⚠️ Duplicate signal skipped: {signal_type} -> {to_user}")
     else:
         # Сохраняем для офлайн пользователей (макс 100)
         if to_user not in offline_messages:
@@ -1127,9 +1147,14 @@ def get_ws_online_users():
 if __name__ == '__main__':
     import os
     port = int(os.environ.get('PORT', 5000))
-    # print(f"✅ Server starting on http://0.0.0.0:{port}")
     print(f"📄 Swagger UI: http://0.0.0.0:{port}/docs/")
     print(f"🔌 WebSocket enabled: {os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'}")
     
-    # Используем SocketIO для поддержки WebSocket
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    # Используем eventlet для WebSocket
+    try:
+        import eventlet
+        eventlet.monkey_patch()
+    except ImportError:
+        pass
+    
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
