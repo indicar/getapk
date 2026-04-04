@@ -11,8 +11,7 @@ from flask_cors import CORS
 # === WEBSOCKET SUPPORT ===
 from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 
-# SocketIO с поддержкой long-polling и WebSocket
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', ping_timeout=60, ping_interval=25)
+# SocketIO будет инициализирован после создания app
 
 # Хранилище WebSocket соединений: {userId: sid}
 ws_connections = {}
@@ -82,6 +81,12 @@ last_request_id = None
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
+
+# SocketIO с поддержкой long-polling и WebSocket
+# На Windows используем threading, на production - eventlet
+import platform
+async_mode = 'threading' if platform.system() == 'Windows' else 'eventlet'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode, ping_timeout=60, ping_interval=25)
 
 # === SWAGGER ===
 swagger_template = {
