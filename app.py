@@ -8,6 +8,18 @@ from flasgger import Swagger
 from dotenv import load_dotenv
 from flask_cors import CORS
 
+# === WEBSOCKET SUPPORT ===
+from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
+
+# SocketIO с поддержкой long-polling и WebSocket
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', ping_timeout=60, ping_interval=25)
+
+# Хранилище WebSocket соединений: {userId: sid}
+ws_connections = {}
+
+# Очередь офлайн сообщений для пользователей
+offline_messages = {}  # {userId: [messages...]}
+
 # === ЗАГРУЗКА .env ===
 print("🚀 Loading environment variables from .env...")
 load_dotenv()
@@ -980,10 +992,141 @@ def download_apk():
                      download_name='messenger-p2p.apk',
                      mimetype='application/vnd.android.package-archive')
 
+# === WEBSOCKET EVENT HANDLERS ===
+
+@socketio.on('connect')
+def handle_connect():
+    """Обработка подключения клиента"""
+    print(f"🔌 Client connected: {request.sid}")
+    emit('connected', {'status': 'ok'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Обработка отключения клиента"""
+    # Удаляем из хранилища соединений
+    user_id_to_remove = None
+    for uid, sid in ws_connections.items():
+        if sid == request.sid:
+            user_id_to_remove = uid
+            break
+    if user_id_to_remove:
+        del ws_connections[user_id_to_remove]
+        print(f"🔌 Client disconnected: {user_id_to_remove}")
+
+@socketio.on('register')
+def handle_register(data):
+    """Регистрация пользователя в WebSocket"""
+    user_id = data.get('userId')
+    nickname = data.get('nickname', user_id)
+    
+    if user_id:
+        ws_connections[user_id] = request.sid
+        join_room(user_id)
+        
+        # Отправляем офлайн сообщения
+        if user_id in offline_messages:
+            for msg in offline_messages[user_id]:
+                emit('signal', msg, room=request.sid)
+            offline_messages[user_id] = []
+        
+        print(f"📱 User registered via WS: {user_id} (sid: {request.sid})")
+        emit('registered', {'userId': user_id, 'status': 'ok'})
+
+@socketio.on('signal')
+def handle_signal(data):
+    """Пересылка сигналов между пользователями"""
+    to_user = data.get('to')
+    signal_type = data.get('type')
+    signal_data = data.get('data')
+    from_user = data.get('from')
+    
+    # Дополнительные данные для WebRTC
+    sdp_mid = data.get('sdpMid')
+    sdp_mline_index = data.get('sdpMLineIndex')
+    
+    signal_message = {
+        'type': signal_type,
+        'from': from_user,
+        'to': to_user,
+        'data': signal_data,
+        'sdpMid': sdp_mid,
+        'sdpMLineIndex': sdp_mline_index,
+        'timestamp': int(os.urandom(8).hex(), 16)
+    }
+    
+    # Если пользователь онлайн через WebSocket - отправляем сразу
+    if to_user in ws_connections:
+        target_sid = ws_connections[to_user]
+        emit('signal', signal_message, room=target_sid)
+        print(f"📡 Signal forwarded via WS: {signal_type} -> {to_user}")
+    else:
+        # Сохраняем для офлайн пользователей (макс 100)
+        if to_user not in offline_messages:
+            offline_messages[to_user] = []
+        offline_messages[to_user].append(signal_message)
+        if len(offline_messages[to_user]) > 100:
+            offline_messages[to_user] = offline_messages[to_user][-100:]
+        print(f"📡 Signal queued for offline user: {signal_type} -> {to_user}")
+
+@socketio.on('get_online_users')
+def handle_get_online_users(data):
+    """Получить список онлайн пользователей"""
+    online_list = []
+    for uid, sid in ws_connections.items():
+        online_list.append({'userId': uid, 'sid': sid})
+    emit('online_users', online_list)
+
+@socketio.on('set_status')
+def handle_set_status(data):
+    """Установить статус (онлайн/офлайн)"""
+    user_id = data.get('userId')
+    online = data.get('online', True)
+    
+    if user_id:
+        if online:
+            ws_connections[user_id] = request.sid
+            join_room(user_id)
+        else:
+            if user_id in ws_connections:
+                del ws_connections[user_id]
+            leave_room(user_id)
+
+# === API ENDPOINT: Получить конфиг режима ===
+@app.route('/api/config/connection', methods=['GET'])
+def get_connection_config():
+    """
+    Get connection configuration (WebSocket vs Polling)
+    ---
+    tags: [Configuration]
+    responses:
+      200:
+        description: Connection config
+    """
+    use_websocket = os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'
+    ws_url = os.getenv('WS_URL', os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:5000'))
+    
+    return jsonify({
+        "useWebsocket": use_websocket,
+        "websocketUrl": f"https://{ws_url.replace('http://', '').replace('https://', '')}" if 'https' not in ws_url else ws_url,
+        "pollingUrl": f"{request.url_root}",
+        "pollingInterval": 5000
+    }), 200
+
+# === API ENDPOINT: Получить список онлайн пользователей ===
+@app.route('/api/ws/online', methods=['GET'])
+def get_ws_online_users():
+    """Получить список онлайн пользователей через WebSocket"""
+    return jsonify([
+        {"userId": uid, "online": True} for uid in ws_connections.keys()
+    ]), 200
+
 # === ЗАПУСК ===
 if __name__ == '__main__':
     import os
     port = int(os.environ.get('PORT', 5000))
     # print(f"✅ Server starting on http://0.0.0.0:{port}")
     print(f"📄 Swagger UI: http://0.0.0.0:{port}/docs/")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    print(f"🔌 WebSocket enabled: {os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'}")
+    
+    # Используем SocketIO для поддержки WebSocket
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
