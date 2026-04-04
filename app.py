@@ -11,13 +11,6 @@ from dotenv import load_dotenv
 from flask_cors import CORS
 
 # === WEBSOCKET SUPPORT ===
-# Применяем eventlet monkey patch в самом начале
-try:
-    import eventlet
-    eventlet.monkey_patch()
-except ImportError:
-    pass
-
 from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 
 # SocketIO будет инициализирован после создания app
