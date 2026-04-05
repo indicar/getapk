@@ -238,17 +238,60 @@ async def upload_apk(request):
         'download_url': download_url
     })
 
-# === APK DOWNLOAD ===
+# === APK DOWNLOAD (публичный) ===
 async def download_apk(request):
     global last_apk_path
     
     if not os.path.exists(last_apk_path):
-        return web.json_response({'error': 'No APK uploaded yet'}, status=404)
+        return web.json_response({'error': 'No APK uploaded yet. Upload one first via /upload_apk'}, status=404)
     
     return web.FileResponse(last_apk_path, headers={'Content-Disposition': 'attachment; filename="messenger-p2p.apk"'})
 
 
-# === FILE UPLOAD ===
+# === FILE UPLOAD (с авторизацией) ===
+async def upload_file_with_auth(request):
+    global last_file_path, file_access_token, file_access_expiration
+    
+    if not check_auth(request):
+        return web.json_response({'error': 'Unauthorized'}, status=401)
+    
+    reader = await request.multipart()
+    field = await reader.next()
+    if field is None:
+        return web.json_response({'error': 'No file part'}, status=400)
+    
+    filename = field.filename or 'file'
+    if filename == '':
+        return web.json_response({'error': 'No selected file'}, status=400)
+    
+    # Удаляем предыдущий файл
+    if last_file_path and os.path.exists(last_file_path):
+        os.remove(last_file_path)
+    
+    # Сохраняем с оригинальным именем
+    last_file_path = os.path.join(UPLOAD_FOLDER, filename)
+    async with aiofiles.open(last_file_path, 'wb') as f:
+        while True:
+            chunk = await field.read_chunk()
+            if not chunk:
+                break
+            await f.write(chunk)
+    
+    # Создаем токен
+    file_access_token = str(uuid.uuid4())
+    file_access_expiration = datetime.now() + timedelta(hours=1)
+    
+    public_download_url = f"{request.url.origin}/public_download/{file_access_token}"
+    
+    return web.json_response({
+        'message': 'File uploaded successfully',
+        'filename': filename,
+        'url': '/download',
+        'public_url': public_download_url,
+        'expires_at': file_access_expiration.isoformat()
+    })
+
+# === FILE UPLOAD (без авторизации для /api/files/upload) ===
 async def upload_file(request):
     reader = await request.multipart()
     
@@ -329,11 +372,78 @@ def create_app():
     app.router.add_get('/turn_credentials', get_turn_credentials)
     
     # APK
+    app.router.add_post('/upload', upload_file_with_auth)  # С авторизацией
     app.router.add_post('/upload_apk', upload_apk)
     app.router.add_get('/download_apk', download_apk)
+    app.router.add_get('/download', download_apk)
+    
+    # Swagger UI
+    async def docs(request):
+        html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>API Documentation</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        h1 { color: #333; }
+        .endpoint { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .method { font-weight: bold; padding: 3px 8px; border-radius: 3px; }
+        .get { background: #61affe; color: white; }
+        .post { background: #49cc90; color: white; }
+    </style>
+</head>
+<body>
+    <h1>📄 API Documentation</h1>
+    <div class="endpoint">
+        <span class="method get">GET</span> <code>/health</code> - Health check
+    </div>
+    <div class="endpoint">
+        <span class="method get">GET</span> <code>/api/config/connection</code> - Connection config
+    </div>
+    <div class="endpoint">
+        <span class="method get">GET</span> <code>/turn_credentials</code> - TURN/STUN credentials
+    </div>
+    <div class="endpoint">
+        <span class="method post">POST</span> <code>/upload</code> - Upload file (Basic Auth)
+    </div>
+    <div class="endpoint">
+        <span class="method post">POST</span> <code>/upload_apk</code> - Upload APK (Basic Auth)
+    </div>
+    <div class="endpoint">
+        <span class="method get">GET</span> <code>/download</code> - Download latest APK
+    </div>
+    <div class="endpoint">
+        <span class="method get">GET</span> <code>/ws</code> - WebSocket endpoint
+    </div>
+    <div class="endpoint">
+        <span class="method post">POST</span> <code>/api/logs</code> - Send logs
+    </div>
+    <div class="endpoint">
+        <span class="method get">GET</span> <code>/api/logs?key=admin123</code> - Get logs
+    </div>
+</body>
+</html>"""
+        return web.Response(text=html, content_type='text/html')
+    
+    app.router.add_get('/docs/', docs)
+    app.router.add_get('/docs', docs)
     
     # Files
     app.router.add_post('/api/files/upload', upload_file)
+    
+    # Public download
+    async def public_download(request, token):
+        global last_file_path, file_access_token, file_access_expiration
+        
+        if not file_access_token or token != file_access_token or datetime.now() > file_access_expiration:
+            return web.json_response({'error': 'Invalid or expired token'}, status=403)
+        
+        if not last_file_path or not os.path.exists(last_file_path):
+            return web.json_response({'error': 'No file uploaded yet'}, status=404)
+        
+        return web.FileResponse(last_file_path, as_attachment=True)
+    
+    app.router.add_get('/public_download/{token}', public_download)
     
     return app
 
