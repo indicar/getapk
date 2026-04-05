@@ -1296,6 +1296,113 @@ def handle_ice_candidate(data):
             'from': from_user
         }, room=ws_connections[to_user])
 
+# === LOGS STORAGE ===
+logs_storage = []  # Хранилище логов от клиентов
+
+@app.route('/api/logs', methods=['POST'])
+def send_logs():
+    """
+    Receive logs from Android client
+    ---
+    tags: [Logs]
+    consumes: [application/json]
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            logs:
+              type: string
+              description: Log content
+            deviceInfo:
+              type: string
+              description: Device information
+    responses:
+      200:
+        description: Logs received
+      400:
+        description: Invalid data
+    """
+    try:
+        data = request.get_json()
+        if not data or 'logs' not in data:
+            return jsonify({'error': 'Missing logs'}), 400
+        
+        logs_storage.append({
+            'timestamp': datetime.now().isoformat(),
+            'logs': data.get('logs', ''),
+            'deviceInfo': data.get('deviceInfo', '')
+        })
+        
+        # Храним максимум 100 логов
+        if len(logs_storage) > 100:
+            logs_storage.pop(0)
+        
+        print(f"📝 Received logs from client, total: {len(logs_storage)}")
+        return jsonify({'success': True, 'count': len(logs_storage)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """
+    Get all logs from clients (also works with ?key=YOUR_API_KEY)
+    ---
+    tags: [Logs]
+    responses:
+      200:
+        description: List of logs
+    """
+    # Проверяем API ключ из query параметра
+    api_key = request.args.get('key', '')
+    if api_key == 'admin123':
+        return jsonify({
+            'count': len(logs_storage),
+            'logs': logs_storage
+        })
+    
+    # Иначе требуем Basic Auth
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Basic '):
+        return jsonify({'error': 'Unauthorized - use ?key=admin123 or Basic Auth'}), 401
+    
+    try:
+        encoded = auth_header[6:]
+        decoded = base64.b64decode(encoded).decode('utf-8')
+        username, password = decoded.split(':', 1)
+    except Exception:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    if username != API_USERNAME or password != API_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    return jsonify({
+        'count': len(logs_storage),
+        'logs': logs_storage
+    })
+
+
+@app.route('/api/logs/latest', methods=['GET'])
+@require_auth
+def get_latest_logs():
+    """
+    Get latest log entry
+    ---
+    tags: [Logs]
+    security: [{ basicAuth: [] }]
+    responses:
+      200:
+        description: Latest log
+    """
+    if not logs_storage:
+        return jsonify({'error': 'No logs available'}), 404
+    
+    return jsonify(logs_storage[-1])
+
+
 # === ЗАПУСК ===
 if __name__ == '__main__':
     import os
