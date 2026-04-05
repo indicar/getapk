@@ -1,1 +1,1 @@
-web: python wsgi.py
+web: python aio_app.py
