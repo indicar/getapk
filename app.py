@@ -88,7 +88,7 @@ CORS(app, supports_credentials=True)
 
 # SocketIO с поддержкой long-polling и WebSocket
 # Используем threading для совместимости
-socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=60, ping_interval=25)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=25)
 
 # === SWAGGER ===
 swagger_template = {
@@ -1409,12 +1409,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"📄 Swagger UI: http://0.0.0.0:{port}/docs/")
     print(f"🔌 WebSocket enabled: {os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'}")
-    
-    # Используем eventlet для WebSocket
-    try:
-        import eventlet
-        eventlet.monkey_patch()
-    except ImportError:
-        pass
     
     socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
