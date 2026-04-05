@@ -5,11 +5,17 @@ import asyncio
 import json
 import os
 import uuid
-from datetime import datetime
+import base64
+import shutil
+from datetime import datetime, timedelta
 from collections import defaultdict
-
+from pathlib import Path
 from aiohttp import web
-import websockets
+import aiofiles
+
+# Конфигурация
+UPLOAD_FOLDER = 'uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Хранилище
 ws_connections = {}  # {user_id: websocket}
@@ -17,6 +23,29 @@ online_users = {}   # {user_id: nickname}
 offline_messages = {}  # {user_id: [messages...]}
 received_messages = {}  # {user_id: set(msg_id)}
 active_calls = {}  # {call_id: {from, to, status}}
+
+# APK
+last_apk_path = os.path.join(UPLOAD_FOLDER, 'latest.apk')
+file_access_token = None
+file_access_expiration = None
+last_file_path = None
+
+# Auth
+API_USERNAME = os.getenv('API_USERNAME', 'admin')
+API_PASSWORD = os.getenv('API_PASSWORD', 'secret')
+
+def check_auth(request):
+    """Проверка авторизации"""
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Basic '):
+        return False
+    try:
+        encoded = auth_header[6:]
+        decoded = base64.b64decode(encoded).decode('utf-8')
+        username, password = decoded.split(':', 1)
+        return username == API_USERNAME and password == API_PASSWORD
+    except:
+        return False
 
 async def websocket_handler(request):
     """Обработчик WebSocket"""
@@ -172,43 +201,139 @@ async def websocket_handler(request):
     
     return ws
 
-# Flask совместимость - базовые endpoints
+# === APK UPLOAD ===
+async def upload_apk(request):
+    global last_apk_path, file_access_token, file_access_expiration
+    
+    if not check_auth(request):
+        return web.json_response({'error': 'Unauthorized'}, status=401)
+    
+    reader = await request.multipart()
+    field = await reader.next()
+    if field is None:
+        return web.json_response({'error': 'No APK file part'}, status=400)
+    
+    filename = field.filename
+    if not filename or not filename.endswith('.apk'):
+        return web.json_response({'error': 'File must be an APK (.apk)'}, status=400)
+    
+    # Удаляем предыдущий APK
+    if os.path.exists(last_apk_path):
+        os.remove(last_apk_path)
+    
+    # Сохраняем новый APK
+    path = os.path.join(UPLOAD_FOLDER, 'latest.apk')
+    async with aiofiles.open(path, 'wb') as f:
+        while True:
+            chunk = await field.read_chunk()
+            if not chunk:
+                break
+            await f.write(chunk)
+    
+    download_url = f"{request.url.origin}/download_apk"
+    
+    return web.json_response({
+        'message': 'APK uploaded successfully',
+        'filename': filename,
+        'download_url': download_url
+    })
+
+# === APK DOWNLOAD ===
+async def download_apk(request):
+    global last_apk_path
+    
+    if not os.path.exists(last_apk_path):
+        return web.json_response({'error': 'No APK uploaded yet'}, status=404)
+    
+    return web.FileResponse(last_apk_path, headers={'Content-Disposition': 'attachment; filename="messenger-p2p.apk"'})
+
+
+# === FILE UPLOAD ===
+async def upload_file(request):
+    reader = await request.multipart()
+    
+    file_field = None
+    to_user = None
+    from_user = None
+    
+    async for field in reader:
+        if field.name == 'file':
+            file_field = field
+        elif field.name == 'to':
+            to_user = await field.text()
+        elif field.name == 'from':
+            from_user = await field.text()
+    
+    if not file_field or not to_user or not from_user:
+        return web.json_response({'error': 'Missing from/to/file'}, status=400)
+    
+    filename = file_field.filename or 'file'
+    file_id = str(uuid.uuid4())
+    
+    # Читаем файл в память
+    file_data = await file_field.read()
+    
+    # Для простоты - не сохраняем на диск, отправляем уведомление
+    return web.json_response({
+        'file_id': file_id,
+        'filename': filename,
+        'size': len(file_data)
+    })
+
+
+# === API endpoints ===
+async def get_connection_config(request):
+    ws_url = os.getenv('WS_URL', os.getenv('RENDER_EXTERNAL_URL', 'https://getapk.onrender.com'))
+    if not ws_url.startswith('wss://') and not ws_url.startswith('ws://'):
+        ws_url = 'wss://' + ws_url.replace('https://', '').replace('http://', '')
+    
+    return web.json_response({
+        "useWebsocket": True,
+        "websocketUrl": ws_url,
+        "pollingUrl": str(request.url.origin()),
+        "pollingInterval": 5000
+    })
+
+async def get_turn_credentials(request):
+    ice_servers = [
+        {"urls": "stun:stun.l.google.com:19302"},
+        {"urls": "stun:stun1.l.google.com:19302"},
+        {"urls": "stun:stun2.l.google.com:19302"},
+        {
+            "urls": ["turn:appp.metered.ca:80?transport=tcp", "turn:appp.metered.ca:443?transport=tcp"],
+            "username": "e87750020052a6fdd244ef0d",
+            "credential": "9SNLVc6Ji/ti7aJg"
+        }
+    ]
+    return web.json_response({"iceServers": ice_servers})
+
+async def health_check(request):
+    return web.json_response({
+        "status": "healthy",
+        "message": "Server is running",
+        "signaling_users": len(ws_connections)
+    })
+
+
 def create_app():
     app = web.Application()
+    
+    # WebSocket
     app.router.add_get('/ws', websocket_handler)
-    app.router.add_get('/health', lambda r: web.Response(text='ok'))
     
-    # API endpoints для конфигурации
-    async def get_connection_config(request):
-        import os
-        ws_url = os.getenv('WS_URL', os.getenv('RENDER_EXTERNAL_URL', 'https://getapk.onrender.com'))
-        # Убедимся что URL начинается с wss:// для WebSocket
-        if not ws_url.startswith('wss://') and not ws_url.startswith('ws://'):
-            ws_url = 'wss://' + ws_url.replace('https://', '').replace('http://', '')
-        
-        return web.json_response({
-            "useWebsocket": True,
-            "websocketUrl": ws_url,
-            "pollingUrl": str(request.url.origin()),
-            "pollingInterval": 5000
-        })
+    # Health
+    app.router.add_get('/health', health_check)
     
-    async def get_turn_credentials(request):
-        # STUN сервера (бесплатные Google)
-        ice_servers = [
-            {"urls": "stun:stun.l.google.com:19302"},
-            {"urls": "stun:stun1.l.google.com:19302"},
-            {"urls": "stun:stun2.l.google.com:19302"},
-            {
-                "urls": ["turn:appp.metered.ca:80?transport=tcp", "turn:appp.metered.ca:443?transport=tcp"],
-                "username": "e87750020052a6fdd244ef0d",
-                "credential": "9SNLVc6Ji/ti7aJg"
-            }
-        ]
-        return web.json_response({"iceServers": ice_servers})
-    
+    # API
     app.router.add_get('/api/config/connection', get_connection_config)
     app.router.add_get('/turn_credentials', get_turn_credentials)
+    
+    # APK
+    app.router.add_post('/upload_apk', upload_apk)
+    app.router.add_get('/download_apk', download_apk)
+    
+    # Files
+    app.router.add_post('/api/files/upload', upload_file)
     
     return app
 
