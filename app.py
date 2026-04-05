@@ -1051,6 +1051,7 @@ def handle_register(data):
 @socketio.on('signal')
 def handle_signal(data):
     """Пересылка сигналов между пользователями"""
+    print(f"🔔 handle_signal ПОЛУЧЕН: {data}")  # ОТЛАДКА
     to_user = data.get('to')
     signal_type = data.get('type')
     signal_data = data.get('data')
