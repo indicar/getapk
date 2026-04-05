@@ -177,6 +177,39 @@ def create_app():
     app = web.Application()
     app.router.add_get('/ws', websocket_handler)
     app.router.add_get('/health', lambda r: web.Response(text='ok'))
+    
+    # API endpoints для конфигурации
+    async def get_connection_config(request):
+        import os
+        ws_url = os.getenv('WS_URL', os.getenv('RENDER_EXTERNAL_URL', 'https://getapk.onrender.com'))
+        # Убедимся что URL начинается с wss:// для WebSocket
+        if not ws_url.startswith('wss://') and not ws_url.startswith('ws://'):
+            ws_url = 'wss://' + ws_url.replace('https://', '').replace('http://', '')
+        
+        return web.json_response({
+            "useWebsocket": True,
+            "websocketUrl": ws_url,
+            "pollingUrl": str(request.url.origin()),
+            "pollingInterval": 5000
+        })
+    
+    async def get_turn_credentials(request):
+        # STUN сервера (бесплатные Google)
+        ice_servers = [
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": "stun:stun1.l.google.com:19302"},
+            {"urls": "stun:stun2.l.google.com:19302"},
+            {
+                "urls": ["turn:appp.metered.ca:80?transport=tcp", "turn:appp.metered.ca:443?transport=tcp"],
+                "username": "e87750020052a6fdd244ef0d",
+                "credential": "9SNLVc6Ji/ti7aJg"
+            }
+        ]
+        return web.json_response({"iceServers": ice_servers})
+    
+    app.router.add_get('/api/config/connection', get_connection_config)
+    app.router.add_get('/turn_credentials', get_turn_credentials)
+    
     return app
 
 if __name__ == '__main__':
