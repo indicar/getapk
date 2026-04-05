@@ -53,6 +53,8 @@ async def websocket_handler(request):
     await ws.prepare(request)
     
     client_id = None
+    client_ip = request.remote
+    print(f"🔌 Client connected from {client_ip}")
     
     try:
         async for msg in ws:
@@ -60,6 +62,8 @@ async def websocket_handler(request):
                 try:
                     data = json.loads(msg.data)
                     msg_type = data.get('type')
+                    
+                    print(f"📥 Message from client: type={msg_type}, data={data}")
                     
                     # Регистрация
                     if msg_type == 'register':
@@ -69,10 +73,14 @@ async def websocket_handler(request):
                         online_users[user_id] = nickname
                         client_id = user_id
                         
-                        print(f"📱 User registered: {user_id}")
+                        print(f"✅ User registered: {user_id} (nickname: {nickname})")
+                        print(f"📊 Total connected users: {len(ws_connections)}")
+                        print(f"📋 Online users: {list(ws_connections.keys())}")
                         
                         # Офлайн сообщения
                         if user_id in offline_messages:
+                            count = len(offline_messages[user_id])
+                            print(f"📬 Sending {count} offline messages to {user_id}")
                             for msg in offline_messages[user_id]:
                                 msg_id = msg.get('msgId')
                                 user_received = received_messages.setdefault(user_id, set())
@@ -92,7 +100,9 @@ async def websocket_handler(request):
                         msg_id = f"{from_user}_{to_user}_{signal_type}_{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().int % 10000}"
                         data['msgId'] = msg_id
                         
-                        print(f"📡 Signal: {signal_type} -> {to_user}")
+                        print(f"📡 Signal: {signal_type} from={from_user} to={to_user}")
+                        print(f"   Online users: {list(ws_connections.keys())}")
+                        print(f"   Recipient online: {to_user in ws_connections}")
                         
                         if to_user in ws_connections:
                             target_ws = ws_connections[to_user]
@@ -100,16 +110,21 @@ async def websocket_handler(request):
                             if msg_id not in user_received:
                                 await target_ws.send_json(data)
                                 user_received.add(msg_id)
+                                print(f"   ✅ Signal FORWARDED to {to_user}")
+                            else:
+                                print(f"   ⚠️ Duplicate signal skipped")
                         else:
                             if to_user not in offline_messages:
                                 offline_messages[to_user] = []
                             offline_messages[to_user].append(data)
                             if len(offline_messages[to_user]) > 100:
                                 offline_messages[to_user] = offline_messages[to_user][-100:]
+                            print(f"   💾 Signal queued for OFFLINE user {to_user} (total: {len(offline_messages[to_user])})")
                     
                     # Онлайн пользователи
                     elif msg_type == 'get_online_users':
                         users = [{'userId': uid, 'nickname': nick} for uid, nick in online_users.items()]
+                        print(f"📋 Sending online users list: {users}")
                         await ws.send_json({'type': 'online_users', 'users': users})
                     
                     # Звонки
@@ -394,33 +409,19 @@ def create_app():
 </head>
 <body>
     <h1>📄 API Documentation</h1>
-    <div class="endpoint">
-        <span class="method get">GET</span> <code>/health</code> - Health check
-    </div>
-    <div class="endpoint">
-        <span class="method get">GET</span> <code>/api/config/connection</code> - Connection config
-    </div>
-    <div class="endpoint">
-        <span class="method get">GET</span> <code>/turn_credentials</code> - TURN/STUN credentials
-    </div>
-    <div class="endpoint">
-        <span class="method post">POST</span> <code>/upload</code> - Upload file (Basic Auth)
-    </div>
-    <div class="endpoint">
-        <span class="method post">POST</span> <code>/upload_apk</code> - Upload APK (Basic Auth)
-    </div>
-    <div class="endpoint">
-        <span class="method get">GET</span> <code>/download</code> - Download latest APK
-    </div>
-    <div class="endpoint">
-        <span class="method get">GET</span> <code>/ws</code> - WebSocket endpoint
-    </div>
-    <div class="endpoint">
-        <span class="method post">POST</span> <code>/api/logs</code> - Send logs
-    </div>
-    <div class="endpoint">
-        <span class="method get">GET</span> <code>/api/logs?key=admin123</code> - Get logs
-    </div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/health</code> - Health check</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/api/config/connection</code> - Connection config</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/turn_credentials</code> - TURN/STUN credentials</div>
+    <div class="endpoint"><span class="method post">POST</span> <code>/upload</code> - Upload file (Basic Auth)</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/download</code> - Download latest file</div>
+    <div class="endpoint"><span class="method post">POST</span> <code>/upload_apk</code> - Upload APK (Basic Auth)</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/download_apk</code> - Download latest APK</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/ws</code> - WebSocket endpoint</div>
+    <div class="endpoint"><span class="method post">POST</span> <code>/api/logs</code> - Send logs</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/api/logs</code> - Get logs (Basic Auth)</div>
+    <div class="endpoint"><span class="method post">POST</span> <code>/notes/{user_token}</code> - Upload encrypted notes</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/notes/{user_token}</code> - Download encrypted notes</div>
+    <div class="endpoint"><span class="method get">GET</span> <code>/api/users/online</code> - Get online users</div>
 </body>
 </html>"""
         return web.Response(text=html, content_type='text/html')
@@ -444,6 +445,151 @@ def create_app():
         return web.FileResponse(last_file_path, as_attachment=True)
     
     app.router.add_get('/public_download/{token}', public_download)
+    
+    # === NOTES ===
+    notes_storage = {}
+    NOTES_FILE = 'notes_data.json'
+    
+    # Загружаем заметки
+    if os.path.exists(NOTES_FILE):
+        try:
+            import json
+            with open(NOTES_FILE, 'r') as f:
+                notes_storage = json.load(f)
+        except:
+            pass
+    
+    def save_notes():
+        import json
+        with open(NOTES_FILE, 'w') as f:
+            json.dump(notes_storage, f)
+    
+    async def upload_notes(request):
+        user_token = request.match_info.get('user_token')
+        try:
+            data = await request.json()
+            if not data or 'encryptedData' not in data or 'iv' not in data:
+                return web.json_response({'error': 'Missing encryptedData or iv'}, status=400)
+            
+            notes_storage[user_token] = {
+                'encryptedData': data.get('encryptedData'),
+                'iv': data.get('iv'),
+                'version': data.get('version', 1)
+            }
+            save_notes()
+            return web.json_response({'success': True, 'message': 'Notes uploaded successfully'})
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)
+    
+    async def download_notes(request):
+        user_token = request.match_info.get('user_token')
+        if user_token not in notes_storage:
+            return web.json_response({'error': 'No notes found for this user'}, status=404)
+        return web.json_response(notes_storage[user_token])
+    
+    async def delete_notes(request):
+        user_token = request.match_info.get('user_token')
+        if user_token in notes_storage:
+            del notes_storage[user_token]
+            save_notes()
+            return web.json_response({'success': True, 'message': 'Notes deleted'})
+        return web.json_response({'error': 'No notes found'}, status=404)
+    
+    async def notes_status(request):
+        user_token = request.match_info.get('user_token')
+        if user_token in notes_storage:
+            return web.json_response({'exists': True, 'has_notes': True})
+        return web.json_response({'exists': False, 'has_notes': False})
+    
+    app.router.add_post('/notes/{user_token}', upload_notes)
+    app.router.add_get('/notes/{user_token}', download_notes)
+    app.router.add_delete('/notes/{user_token}', delete_notes)
+    app.router.add_get('/notes/{user_token}/status', notes_status)
+    
+    # === LOGS ===
+    logs_storage = []
+    
+    async def send_logs(request):
+        global logs_storage
+        try:
+            data = await request.json()
+            if not data or 'logs' not in data:
+                return web.json_response({'error': 'Missing logs'}, status=400)
+            
+            logs_storage.append({
+                'timestamp': datetime.now().isoformat(),
+                'logs': data.get('logs', ''),
+                'deviceInfo': data.get('deviceInfo', '')
+            })
+            
+            if len(logs_storage) > 100:
+                logs_storage.pop(0)
+            
+            print(f"📝 Received logs from client, total: {len(logs_storage)}")
+            return web.json_response({'success': True, 'count': len(logs_storage)})
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)
+    
+    async def get_logs(request):
+        api_key = request.query.get('key', '')
+        if api_key == 'admin123':
+            return web.json_response({'count': len(logs_storage), 'logs': logs_storage})
+        return web.json_response({'error': 'Unauthorized'}, status=401)
+    
+    async def get_latest_logs(request):
+        if not logs_storage:
+            return web.json_response({'error': 'No logs available'}, status=404)
+        return web.json_response(logs_storage[-1])
+    
+    app.router.add_post('/api/logs', send_logs)
+    app.router.add_get('/api/logs', get_logs)
+    app.router.add_get('/api/logs/latest', get_latest_logs)
+    
+    # === SIGNALING (fallback для старого API) ===
+    signaling_storage = {}  # {userId: [signals]}
+    
+    async def signaling_register(request, user_id):
+        nickname = request.query.get('nickname', user_id)
+        if user_id not in signaling_storage:
+            signaling_storage[user_id] = []
+        return web.json_response({'success': True})
+    
+    async def signaling_online(request, user_id):
+        online = request.query.get('online', 'true').lower() == 'true'
+        if online:
+            nickname = request.query.get('nickname', user_id)
+            online_users[user_id] = nickname
+        else:
+            online_users.pop(user_id, None)
+        return web.json_response({'success': True})
+    
+    async def signaling_send(request, user_id):
+        try:
+            data = await request.json()
+            if user_id not in signaling_storage:
+                signaling_storage[user_id] = []
+            signaling_storage[user_id].append(data)
+            if len(signaling_storage[user_id]) > 100:
+                signaling_storage[user_id] = signaling_storage[user_id][-100:]
+            return web.Response(status=200)
+        except:
+            return web.Response(status=200)
+    
+    async def signaling_get(request, user_id):
+        since = int(request.query.get('since', 0))
+        signals = signaling_storage.get(user_id, [])
+        new_signals = [s for s in signals if s.get('timestamp', 0) > since]
+        return web.json_response(new_signals)
+    
+    async def get_online_users(request):
+        return web.json_response([{"userId": uid, "online": True} for uid in ws_connections.keys()])
+    
+    app.router.add_post('/api/signaling/register/{user_id}', signaling_register)
+    app.router.add_post('/api/signaling/online/{user_id}', signaling_online)
+    app.router.add_post('/api/signaling/{user_id}', signaling_send)
+    app.router.add_get('/api/signaling/{user_id}', signaling_get)
+    app.router.add_get('/api/users/online', get_online_users)
+    app.router.add_get('/api/ws/online', get_online_users)
     
     return app
 
