@@ -30,6 +30,22 @@ file_access_token = None
 file_access_expiration = None
 last_file_path = None
 
+# Server URL
+SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:5000')
+
+# Last request from Android
+last_request = {
+    'text': None,
+    'image_path': None,
+    'has_been_read': True,
+    'processing_status': 'received',
+    'result': None
+}
+last_request_id = None
+
+# File transfers
+file_transfers = {}  # {file_id: {"from": user, "to": user, "filename": str, "data": bytes}}
+
 # Auth
 API_USERNAME = os.getenv('API_USERNAME', 'admin')
 API_PASSWORD = os.getenv('API_PASSWORD', 'secret')
@@ -308,6 +324,7 @@ async def upload_file_with_auth(request):
 
 # === FILE UPLOAD (без авторизации для /api/files/upload) ===
 async def upload_file(request):
+    global file_transfers
     reader = await request.multipart()
     
     file_field = None
@@ -331,7 +348,15 @@ async def upload_file(request):
     # Читаем файл в память
     file_data = await file_field.read()
     
-    # Для простоты - не сохраняем на диск, отправляем уведомление
+    # Сохраняем в file_transfers
+    file_transfers[file_id] = {
+        'from': from_user,
+        'to': to_user,
+        'filename': filename,
+        'data': file_data,
+        'size': len(file_data)
+    }
+    
     return web.json_response({
         'file_id': file_id,
         'filename': filename,
@@ -590,6 +615,184 @@ def create_app():
     app.router.add_get('/api/signaling/{user_id}', signaling_get)
     app.router.add_get('/api/users/online', get_online_users)
     app.router.add_get('/api/ws/online', get_online_users)
+    
+    # === SERVER URL ===
+    async def set_server_url(request):
+        global SERVER_URL
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        
+        data = await request.post()
+        new_url = data.get('url')
+        if not new_url:
+            return web.json_response({'error': 'URL parameter is required'}, status=400)
+        
+        if not new_url.startswith(('http://', 'https://')):
+            return web.json_response({'error': 'Invalid URL format'}, status=400)
+        
+        SERVER_URL = new_url
+        return web.json_response({'message': 'Server URL updated successfully', 'url': SERVER_URL})
+    
+    async def get_server_url(request):
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        return web.json_response({'url': SERVER_URL})
+    
+    # === ANDROID REQUEST ===
+    async def send_request(request):
+        global last_request, last_request_id
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        
+        reader = await request.multipart()
+        text = ''
+        image_path = None
+        
+        async for field in reader:
+            if field.name == 'text':
+                text = await field.text()
+            elif field.name == 'image':
+                filename = field.filename or 'android_image.jpg'
+                image_path = os.path.join(UPLOAD_FOLDER, filename)
+                async with aiofiles.open(image_path, 'wb') as f:
+                    while True:
+                        chunk = await field.read_chunk()
+                        if not chunk:
+                            break
+                        await f.write(chunk)
+        
+        if not text and not image_path:
+            return web.json_response({'error': 'Text or image must be provided'}, status=400)
+        
+        last_request['text'] = text
+        last_request['image_path'] = image_path
+        last_request['has_been_read'] = False
+        last_request['processing_status'] = 'received'
+        last_request['result'] = None
+        last_request_id = str(uuid.uuid4())
+        
+        return web.json_response({'message': 'Request saved successfully', 'request_id': last_request_id})
+    
+    async def update_request_status(request):
+        global last_request
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        
+        data = await request.post()
+        new_status = data.get('status')
+        result = data.get('result')
+        
+        valid_statuses = ['received', 'processing', 'completed', 'failed']
+        if new_status not in valid_statuses:
+            return web.json_response({'error': f'Invalid status. Valid: {", ".join(valid_statuses)}'}, status=400)
+        
+        last_request['processing_status'] = new_status
+        if result is not None:
+            last_request['result'] = result
+        
+        return web.json_response({'message': 'Status updated successfully', 'request_id': last_request_id, 'new_status': new_status})
+    
+    async def request_status(request):
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        
+        has_unread_request = not last_request['has_been_read']
+        return web.json_response({
+            'has_unread_request': has_unread_request,
+            'text': last_request['text'],
+            'image_available': bool(last_request.get('image_path'))
+        })
+    
+    async def get_last_request(request):
+        global last_request
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        
+        if last_request['has_been_read']:
+            return web.json_response({'error': 'No unread request available'}, status=404)
+        
+        response_data = {
+            'text': last_request['text'],
+            'image_base64': None
+        }
+        
+        if last_request.get('image_path') and os.path.exists(last_request['image_path']):
+            with open(last_request['image_path'], 'rb') as f:
+                img_data = f.read()
+                response_data['image_base64'] = base64.b64encode(img_data).decode('utf-8')
+        
+        last_request['has_been_read'] = True
+        return web.json_response(response_data)
+    
+    async def poll_request_status(request):
+        global last_request, last_request_id
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        
+        if last_request_id is None or (last_request['processing_status'] == 'received' and last_request['has_been_read']):
+            return web.Response(status=204)
+        
+        return web.json_response({
+            'request_id': last_request_id,
+            'processing_status': last_request['processing_status'],
+            'has_result': last_request['result'] is not None
+        })
+    
+    async def get_request_result(request):
+        global last_request, last_request_id
+        if not check_auth(request):
+            return web.json_response({'error': 'Unauthorized'}, status=401)
+        
+        if last_request['result'] is None:
+            return web.json_response({'error': 'No result available for the request'}, status=404)
+        
+        response_data = {
+            'request_id': last_request_id,
+            'processing_status': last_request['processing_status'],
+            'result': last_request['result']
+        }
+        
+        last_request['processing_status'] = 'received'
+        last_request['result'] = None
+        return web.json_response(response_data)
+    
+    # === FILE TRANSFER ===
+    async def download_file_transfer(request, file_id):
+        if file_id not in file_transfers:
+            return web.json_response({'error': 'File not found'}, status=404)
+        
+        transfer = file_transfers[file_id]
+        from io import BytesIO
+        return web.Response(
+            body=transfer['data'],
+            headers={
+                'Content-Disposition': f'attachment; filename="{transfer["filename"]}"'
+            }
+        )
+    
+    async def get_pending_files(request, user_id):
+        pending = []
+        for fid, transfer in file_transfers.items():
+            if transfer['to'] == user_id:
+                pending.append({
+                    'file_id': fid,
+                    'filename': transfer['filename'],
+                    'size': transfer['size'],
+                    'from': transfer['from']
+                })
+        return web.json_response(pending)
+    
+    # Register routes
+    app.router.add_post('/set_url', set_server_url)
+    app.router.add_get('/get_url', get_server_url)
+    app.router.add_post('/send_request', send_request)
+    app.router.add_post('/update_request_status', update_request_status)
+    app.router.add_get('/request_status', request_status)
+    app.router.add_get('/get_last_request', get_last_request)
+    app.router.add_get('/poll_request_status', poll_request_status)
+    app.router.add_get('/get_request_result', get_request_result)
+    app.router.add_get('/api/files/{file_id}', download_file_transfer)
+    app.router.add_get('/api/files/pending/{user_id}', get_pending_files)
     
     return app
 
